@@ -1,0 +1,593 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Filters Section -->
+<div class="bg-white rounded-lg shadow-sm border p-6 mb-8">
+  <h2 class="text-lg font-semibold text-gray-900 mb-6 flex items-center">
+    <i class="fas fa-filter mr-2 text-blue-600"></i>
+    Filter Trade-ups
+  </h2>
+
+  <form id="filters-form" class="space-y-6">
+    <!-- Row 1: Basic Filters -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Max Input Price -->
+      <div>
+        <label for="max_cost" class="block text-sm font-medium text-gray-700 mb-2">
+          Max Input Price
+        </label>
+        <div class="relative">
+          <span class="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500">$</span>
+          <input type="number" id="max_cost" name="max_cost" step="0.01" min="0" placeholder="Any"
+            class="pl-8 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+        </div>
+      </div>
+
+      <!-- Collection -->
+      <div>
+        <label for="collection" class="block text-sm font-medium text-gray-700 mb-2">
+          Collection
+        </label>
+        <select id="collection" name="collection"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+          <option value="">Any Collection</option>
+          {% for coll in collections %}
+          <option value="{{ coll }}">{{ coll }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Min Success % -->
+      <div>
+        <label for="min_success_pct" class="block text-sm font-medium text-gray-700 mb-2">
+          Min Success %
+        </label>
+        <div class="relative">
+          <input type="number" id="min_success_pct" name="min_success_pct" step="1" min="0" max="100" placeholder="0"
+            class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 pr-8">
+          <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">%</span>
+        </div>
+      </div>
+
+      <!-- Min Profit % -->
+      <div>
+        <label for="min_profit_pct" class="block text-sm font-medium text-gray-700 mb-2">
+          Min Profit %
+        </label>
+        <div class="relative">
+          <input type="number" id="min_profit_pct" name="min_profit_pct" step="1" placeholder="0"
+            class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 pr-8">
+          <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 2: Advanced Filters -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <!-- StatTrak Filter -->
+      <div>
+        <label for="stattrak" class="block text-sm font-medium text-gray-700 mb-2">
+          StatTrak Filter
+        </label>
+        <select id="stattrak" name="stattrak"
+          class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+          <option value="both">Both StatTrak & Non-StatTrak</option>
+          <option value="false">Non-StatTrak Only</option>
+          <option value="true">StatTrak Only</option>
+        </select>
+      </div>
+
+      <!-- Fee Rate -->
+      <div>
+        <label for="fee_rate" class="block text-sm font-medium text-gray-700 mb-2">
+          Market Fee Rate
+        </label>
+        <div class="relative">
+          <input type="number" id="fee_rate" name="fee_rate" step="0.01" min="0" max="1" value="{{ default_fee_rate }}"
+            class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 pr-8">
+          <span class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500">%</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">Steam market fee (default: 15%)</p>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex items-end space-x-3">
+        <button type="submit"
+          class="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
+          <i class="fas fa-search mr-2"></i>
+          Calculate
+        </button>
+
+        <button type="button" id="export-csv"
+          class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors">
+          <i class="fas fa-download mr-2"></i>
+          CSV
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- Results Section -->
+<div class="bg-white rounded-lg shadow-sm border">
+  <!-- Results Header -->
+  <div class="px-6 py-4 border-b border-gray-200">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+          <i class="fas fa-chart-bar mr-2 text-green-600"></i>
+          Profitable Trade-ups
+        </h2>
+        <p id="results-summary" class="text-sm text-gray-600 mt-1">
+          Search for profitable trade-up opportunities
+        </p>
+      </div>
+
+      <!-- Pagination Controls -->
+      <div id="pagination-controls" class="flex items-center space-x-2 mt-4 sm:mt-0" style="display: none;">
+        <button id="prev-page"
+          class="px-3 py-1 rounded border border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+
+        <span id="page-info" class="text-sm text-gray-600 px-3">
+          Page 1 of 1
+        </span>
+
+        <button id="next-page"
+          class="px-3 py-1 rounded border border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+          <i class="fas fa-chevron-right"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Table -->
+  <div id="results-container" class="overflow-x-auto">
+    <div id="no-results" class="text-center py-12">
+      <i class="fas fa-search text-4xl text-gray-300 mb-4"></i>
+      <h3 class="text-lg font-medium text-gray-900 mb-2">No Results Yet</h3>
+      <p class="text-gray-600">Set your filters and click "Calculate" to find profitable trade-ups</p>
+    </div>
+
+    <table id="results-table" class="results-table w-full" style="display: none;">
+      <thead>
+        <tr>
+          <th>Trade-up Details</th>
+          <th>Input Cost</th>
+          <th>Success Rate</th>
+          <th>Expected Value</th>
+          <th>Profit Margin</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="results-tbody">
+        <!-- Results will be populated here -->
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Outcome Details Modal -->
+<div id="outcome-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+  <div class="flex items-center justify-center min-h-screen p-4">
+    <div class="bg-white rounded-lg max-w-4xl w-full max-h-screen overflow-y-auto">
+      <!-- Modal Header -->
+      <div class="flex justify-between items-center p-6 border-b">
+        <h3 class="text-lg font-semibold text-gray-900">Trade-up Outcome Details</h3>
+        <button id="close-modal" class="text-gray-400 hover:text-gray-600">
+          <i class="fas fa-times text-xl"></i>
+        </button>
+      </div>
+
+      <!-- Modal Content -->
+      <div id="modal-content" class="p-6">
+        <!-- Content will be populated dynamically -->
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Global variables
+  let currentPage = 1;
+  let totalPages = 1;
+  let currentFilters = {};
+
+  // DOM elements
+  const filtersForm = document.getElementById('filters-form');
+  const resultsTable = document.getElementById('results-table');
+  const resultsTbody = document.getElementById('results-tbody');
+  const noResults = document.getElementById('no-results');
+  const resultsSummary = document.getElementById('results-summary');
+  const paginationControls = document.getElementById('pagination-controls');
+  const pageInfo = document.getElementById('page-info');
+  const prevPageBtn = document.getElementById('prev-page');
+  const nextPageBtn = document.getElementById('next-page');
+  const loadingOverlay = document.getElementById('loading-overlay');
+  const outcomeModal = document.getElementById('outcome-modal');
+  const modalContent = document.getElementById('modal-content');
+  const closeModal = document.getElementById('close-modal');
+  const exportCsvBtn = document.getElementById('export-csv');
+
+  // Event listeners
+  filtersForm.addEventListener('submit', handleSearch);
+  prevPageBtn.addEventListener('click', () => changePage(currentPage - 1));
+  nextPageBtn.addEventListener('click', () => changePage(currentPage + 1));
+  closeModal.addEventListener('click', hideModal);
+  exportCsvBtn.addEventListener('click', exportCsv);
+
+  // Close modal when clicking outside
+  outcomeModal.addEventListener('click', (e) => {
+    if (e.target === outcomeModal) {
+      hideModal();
+    }
+  });
+
+  // Handle form submission
+  async function handleSearch(e) {
+    e.preventDefault();
+    currentPage = 1;
+    await performSearch();
+  }
+
+  // Perform search with current filters
+  async function performSearch() {
+    showLoading();
+
+    try {
+      // Collect form data
+      const formData = new FormData(filtersForm);
+      currentFilters = {};
+
+      for (const [key, value] of formData.entries()) {
+        if (value.trim() !== '') {
+          currentFilters[key] = value;
+        }
+      }
+
+      // Add pagination
+      currentFilters.page = currentPage;
+      currentFilters.page_size = 25;
+
+      // Build query string
+      const queryString = new URLSearchParams(currentFilters).toString();
+
+      // Fetch results
+      const response = await fetch(`/api/tradeups?${queryString}`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      // Update UI
+      displayResults(data);
+      updatePagination(data.meta);
+      updateDataAge(data.meta.data_age_minutes);
+
+    } catch (error) {
+      console.error('Search error:', error);
+      showError(`Failed to search: ${error.message}`);
+    } finally {
+      hideLoading();
+    }
+  }
+
+  // Display search results
+  function displayResults(data) {
+    const results = data.results || [];
+
+    if (results.length === 0) {
+      resultsTable.style.display = 'none';
+      noResults.style.display = 'block';
+      resultsSummary.textContent = 'No profitable trade-ups found with current filters';
+      return;
+    }
+
+    // Show table and hide no results
+    noResults.style.display = 'none';
+    resultsTable.style.display = 'table';
+
+    // Update summary
+    const total = data.meta.total || 0;
+    const showing = results.length;
+    resultsSummary.textContent = `Found ${total} profitable trade-ups, showing ${showing}`;
+
+    // Clear existing results
+    resultsTbody.innerHTML = '';
+
+    // Add result rows
+    results.forEach((result, index) => {
+      const row = createResultRow(result, index);
+      resultsTbody.appendChild(row);
+    });
+  }
+
+  // Create a result row
+  function createResultRow(result, index) {
+    const row = document.createElement('tr');
+    row.className = 'hover:bg-gray-50 transition-colors';
+
+    // Collection mix display
+    const collectionMix = result.collection_mix.map(mix =>
+      `<span class="collection-badge">${mix.count}× ${mix.collection}</span>`
+    ).join('');
+
+    // Profit color
+    const profitClass = result.margin_pct >= 0 ? 'profit-positive' : 'profit-negative';
+    const profitIcon = result.margin_pct >= 0 ? 'fa-arrow-up' : 'fa-arrow-down';
+
+    row.innerHTML = `
+        <td>
+            <div class="space-y-2">
+                <div class="font-medium text-gray-900">
+                    ${result.rarity} ${result.stattrak ? '(StatTrak™)' : ''}
+                </div>
+                <div class="text-sm">
+                    ${collectionMix}
+                </div>
+            </div>
+        </td>
+        <td>
+            <div class="text-sm">
+                <div class="font-medium">$${result.total_input_cost.toFixed(2)}</div>
+                <div class="text-gray-500">Avg: $${result.avg_input_price.toFixed(2)}</div>
+            </div>
+        </td>
+        <td>
+            <div class="flex items-center">
+                <div class="w-full bg-gray-200 rounded-full h-2 mr-2">
+                    <div class="bg-green-600 h-2 rounded-full" style="width: ${result.success_pct}%"></div>
+                </div>
+                <span class="text-sm font-medium">${result.success_pct.toFixed(1)}%</span>
+            </div>
+        </td>
+        <td>
+            <div class="font-medium ${result.ev >= 0 ? 'text-green-600' : 'text-red-600'}">
+                ${result.ev >= 0 ? '+' : ''}$${result.ev.toFixed(2)}
+            </div>
+        </td>
+        <td>
+            <div class="flex items-center ${profitClass}">
+                <i class="fas ${profitIcon} mr-1"></i>
+                ${result.margin_pct.toFixed(2)}%
+            </div>
+        </td>
+        <td>
+            <div class="flex space-x-2">
+                <button onclick="showOutcomeDetails(${index})" 
+                        class="text-blue-600 hover:text-blue-800 text-sm">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Details
+                </button>
+                <button onclick="copyInputs(${index})" 
+                        class="text-green-600 hover:text-green-800 text-sm">
+                    <i class="fas fa-copy mr-1"></i>
+                    Copy
+                </button>
+            </div>
+        </td>
+    `;
+
+    // Store result data for later use
+    row.dataset.result = JSON.stringify(result);
+
+    return row;
+  }
+
+  // Show outcome details modal
+  function showOutcomeDetails(index) {
+    const row = resultsTbody.children[index];
+    const result = JSON.parse(row.dataset.result);
+
+    // Build modal content
+    let content = `
+        <div class="space-y-6">
+            <!-- Trade-up Summary -->
+            <div class="bg-gray-50 rounded-lg p-4">
+                <h4 class="font-semibold text-gray-900 mb-3">Trade-up Summary</h4>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <span class="text-gray-600">Rarity:</span>
+                        <span class="font-medium ml-2">${result.rarity} ${result.stattrak ? '(StatTrak™)' : ''}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-600">Total Cost:</span>
+                        <span class="font-medium ml-2">$${result.total_input_cost.toFixed(2)}</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-600">Success Rate:</span>
+                        <span class="font-medium ml-2">${result.success_pct.toFixed(2)}%</span>
+                    </div>
+                    <div>
+                        <span class="text-gray-600">Expected Value:</span>
+                        <span class="font-medium ml-2 ${result.ev >= 0 ? 'text-green-600' : 'text-red-600'}">
+                            ${result.ev >= 0 ? '+' : ''}$${result.ev.toFixed(2)}
+                        </span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Possible Outcomes -->
+            <div>
+                <h4 class="font-semibold text-gray-900 mb-3">Possible Outcomes</h4>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="text-left p-2">Item</th>
+                                <th class="text-left p-2">Collection</th>
+                                <th class="text-left p-2">Price</th>
+                                <th class="text-left p-2">Probability</th>
+                                <th class="text-left p-2">EV Contribution</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    `;
+
+    result.outcomes.forEach(outcome => {
+      content += `
+            <tr class="border-b outcome-row">
+                <td class="p-2 font-medium">${outcome.name}</td>
+                <td class="p-2 text-gray-600">${outcome.collection}</td>
+                <td class="p-2">$${outcome.price.toFixed(2)}</td>
+                <td class="p-2">${(outcome.prob * 100).toFixed(2)}%</td>
+                <td class="p-2">$${outcome.ev_contrib.toFixed(2)}</td>
+            </tr>
+        `;
+    });
+
+    content += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- Example Inputs -->
+            <div>
+                <h4 class="font-semibold text-gray-900 mb-3">Example Input Items</h4>
+                <div class="bg-gray-50 rounded-lg p-4">
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+    `;
+
+    result.inputs_example.forEach((input, i) => {
+      content += `<div>${i + 1}. ${input}</div>`;
+    });
+
+    content += `
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    modalContent.innerHTML = content;
+    outcomeModal.classList.remove('hidden');
+  }
+
+  // Copy inputs to clipboard
+  async function copyInputs(index) {
+    const row = resultsTbody.children[index];
+    const result = JSON.parse(row.dataset.result);
+
+    const inputsList = result.inputs_example.join('\n');
+
+    try {
+      await navigator.clipboard.writeText(inputsList);
+      showSuccess('Input items copied to clipboard!');
+    } catch (error) {
+      console.error('Copy failed:', error);
+      showError('Failed to copy to clipboard');
+    }
+  }
+
+  // Hide modal
+  function hideModal() {
+    outcomeModal.classList.add('hidden');
+  }
+
+  // Update pagination controls
+  function updatePagination(meta) {
+    const total = meta.total || 0;
+    const pageSize = meta.page_size || 25;
+    currentPage = meta.page || 1;
+    totalPages = Math.ceil(total / pageSize);
+
+    if (totalPages <= 1) {
+      paginationControls.style.display = 'none';
+      return;
+    }
+
+    paginationControls.style.display = 'flex';
+    pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+
+    prevPageBtn.disabled = currentPage <= 1;
+    nextPageBtn.disabled = currentPage >= totalPages;
+  }
+
+  // Change page
+  async function changePage(newPage) {
+    if (newPage < 1 || newPage > totalPages) return;
+
+    currentPage = newPage;
+    await performSearch();
+  }
+
+  // Export CSV
+  async function exportCsv() {
+    try {
+      showLoading();
+
+      // Use current filters but remove pagination
+      const csvFilters = { ...currentFilters };
+      delete csvFilters.page;
+      delete csvFilters.page_size;
+
+      const queryString = new URLSearchParams(csvFilters).toString();
+
+      // Create download link
+      const link = document.createElement('a');
+      link.href = `/api/tradeups/csv?${queryString}`;
+      link.download = 'cs2_tradeups.csv';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      showSuccess('CSV export started!');
+
+    } catch (error) {
+      console.error('Export error:', error);
+      showError('Failed to export CSV');
+    } finally {
+      hideLoading();
+    }
+  }
+
+  // Update data age display
+  function updateDataAge(ageMinutes) {
+    document.getElementById('data-age').textContent = ageMinutes;
+  }
+
+  // Show/hide loading
+  function showLoading() {
+    loadingOverlay.classList.remove('hidden');
+  }
+
+  function hideLoading() {
+    loadingOverlay.classList.add('hidden');
+  }
+
+  // Show success message
+  function showSuccess(message) {
+    // Simple alert for now - could be enhanced with toast notifications
+    alert(message);
+  }
+
+  // Show error message
+  function showError(message) {
+    alert('Error: ' + message);
+  }
+
+  // Initialize page
+  document.addEventListener('DOMContentLoaded', function () {
+    // Auto-submit form if there are URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('auto') || urlParams.toString()) {
+      // Populate form from URL params
+      for (const [key, value] of urlParams.entries()) {
+        const input = document.querySelector(`[name="${key}"]`);
+        if (input && key !== 'auto') {
+          input.value = value;
+        }
+      }
+
+      // Trigger search
+      handleSearch({ preventDefault: () => { } });
+    }
+  });
+</script>
+{% endblock %}

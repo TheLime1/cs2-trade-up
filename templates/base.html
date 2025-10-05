@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}CS2 Trade-ups Calculator{% endblock %}</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Font Awesome for icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    /* Custom styles */
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .fade-in {
+      animation: fadeIn 0.3s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    .outcome-row {
+      transition: background-color 0.2s ease;
+    }
+
+    .outcome-row:hover {
+      background-color: #f3f4f6;
+    }
+
+    /* Results table styling */
+    .results-table {
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    .results-table th {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-weight: 600;
+      padding: 12px 16px;
+      text-align: left;
+      border: none;
+    }
+
+    .results-table th:first-child {
+      border-top-left-radius: 8px;
+    }
+
+    .results-table th:last-child {
+      border-top-right-radius: 8px;
+    }
+
+    .results-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .profit-positive {
+      color: #059669;
+      font-weight: 600;
+    }
+
+    .profit-negative {
+      color: #dc2626;
+      font-weight: 600;
+    }
+
+    .collection-badge {
+      display: inline-block;
+      background: #e5e7eb;
+      color: #374151;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      margin-right: 4px;
+      margin-bottom: 2px;
+    }
+  </style>
+
+  {% block extra_head %}{% endblock %}
+</head>
+
+<body class="bg-gray-50 min-h-screen">
+  <!-- Header -->
+  <header class="bg-white shadow-sm border-b">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between items-center py-4">
+        <div class="flex items-center">
+          <i class="fas fa-chart-line text-blue-600 text-2xl mr-3"></i>
+          <h1 class="text-2xl font-bold text-gray-900">CS2 Trade-ups Calculator</h1>
+        </div>
+
+        <div class="flex items-center space-x-4">
+          <!-- Data freshness indicator -->
+          <div id="data-status" class="flex items-center text-sm text-gray-600">
+            <i class="fas fa-clock mr-1"></i>
+            <span>Data age: <span id="data-age">{{ data_age_minutes }}</span> min</span>
+          </div>
+
+          <!-- GitHub link -->
+          <a href="https://github.com/TheLime1/cs2-trade-up" target="_blank"
+            class="text-gray-600 hover:text-gray-900 transition-colors">
+            <i class="fab fa-github text-xl"></i>
+          </a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% if error %}
+    <!-- Error banner -->
+    <div class="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
+      <div class="flex">
+        <i class="fas fa-exclamation-triangle text-red-400 mr-3 mt-0.5"></i>
+        <div>
+          <h3 class="text-sm font-medium text-red-800">Error Loading Data</h3>
+          <p class="text-sm text-red-700 mt-1">{{ error }}</p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-white border-t mt-12">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div class="flex flex-col md:flex-row justify-between items-center">
+        <div class="text-sm text-gray-600 mb-4 md:mb-0">
+          <p>CS2 Trade-ups Calculator - Find profitable trade-up opportunities</p>
+          <p class="mt-1">Data from <a href="https://github.com/TheLime1/cs2-price-database" target="_blank"
+              class="text-blue-600 hover:text-blue-800">CS2 Price Database</a></p>
+        </div>
+
+        <div class="flex items-center space-x-4 text-sm text-gray-600">
+          <div class="flex items-center">
+            <i class="fas fa-exclamation-circle mr-1"></i>
+            <span>Use at your own risk</span>
+          </div>
+          <div class="flex items-center">
+            <i class="fas fa-info-circle mr-1"></i>
+            <span>Prices may vary</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+    <div class="flex items-center justify-center h-full">
+      <div class="bg-white rounded-lg p-6 flex items-center">
+        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
+        <span class="text-lg font-medium">Calculating trade-ups...</span>
+      </div>
+    </div>
+  </div>
+
+  {% block scripts %}{% endblock %}
+</body>
+
+</html>
