@@ -1013,44 +1013,59 @@ class TradeUpCalculator:
                 # Probability per unique skin (not per exterior)
                 skin_probability = collection_prob / num_unique_skins
 
-                # Determine which exterior(s) are achievable based on input float
-                achievable_variants = []
+                # Determine the OVERALL float range for this base skin
+                # (take min of all variant mins, max of all variant maxes)
+                base_min_float = None
+                base_max_float = None
+                for variant in skin_variants:
+                    if variant.min_float is not None:
+                        base_min_float = min(
+                            base_min_float, variant.min_float) if base_min_float is not None else variant.min_float
+                    if variant.max_float is not None:
+                        base_max_float = max(
+                            base_max_float, variant.max_float) if base_max_float is not None else variant.max_float
 
-                if avg_input_float is not None:
-                    # Filter to only achievable exteriors
+                # Determine which exterior is achievable based on input float
+                achievable_variant = None
+
+                if avg_input_float is not None and base_min_float is not None and base_max_float is not None:
+                    # Calculate the expected output float using the BASE skin's overall range
+                    output_float = FloatCalculator.calculate_output_float(
+                        [avg_input_float] * 10, base_min_float, base_max_float
+                    )
+
+                    # Determine which exterior this float maps to
+                    expected_exterior = FloatCalculator.float_to_exterior(
+                        output_float, base_min_float, base_max_float
+                    )
+
+                    # Find the variant with this exterior
                     for variant in skin_variants:
-                        if variant.min_float is None or variant.max_float is None:
-                            continue
-
-                        # Check if this exterior is achievable given the input float
-                        if FloatCalculator.is_exterior_achievable(
-                            avg_input_float, variant.min_float, variant.max_float, variant.exterior
-                        ):
-                            achievable_variants.append(variant)
+                        if variant.exterior == expected_exterior:
+                            achievable_variant = variant
+                            break
                 else:
-                    # If no float info, include all variants (fallback mode)
-                    achievable_variants = skin_variants
+                    # If no float info, pick the first variant (fallback mode)
+                    achievable_variant = skin_variants[0] if skin_variants else None
 
-                # Add outcomes only for achievable variants
-                for variant in achievable_variants:
-                    if variant.steam_price is None:
-                        continue
-
+                # Add outcome for the single achievable variant
+                if achievable_variant and achievable_variant.steam_price is not None:
                     # Apply liquidity guard
-                    if (variant.availability is not None and variant.availability < self.min_liquidity):
+                    if (achievable_variant.availability is not None and
+                            achievable_variant.availability < self.min_liquidity):
                         continue
 
                     # Apply sell adjustments
                     net_price = self.apply_market_adjustments(
-                        variant.steam_price, is_buying=False)
+                        achievable_variant.steam_price, is_buying=False)
 
                     expected_revenue_contribution = skin_probability * net_price
 
                     outcomes.append(TradeUpOutcome(
-                        market_name=variant.market_name,
+                        market_name=achievable_variant.market_name,
                         collection=collection,
                         probability=skin_probability,
-                        price=variant.steam_price,
+                        price=achievable_variant.steam_price,
                         net_price=net_price,
                         expected_revenue_contribution=expected_revenue_contribution
                     ))
@@ -1230,45 +1245,59 @@ class TradeUpCalculator:
                 # Probability per unique skin (not per exterior)
                 skin_probability = collection_prob / num_unique_skins
 
-                # Determine which exterior(s) are achievable based on input float
-                achievable_variants = []
+                # Determine the OVERALL float range for this base skin
+                # (take min of all variant mins, max of all variant maxes)
+                base_min_float = None
+                base_max_float = None
+                for variant in skin_variants:
+                    if variant.min_float is not None:
+                        base_min_float = min(
+                            base_min_float, variant.min_float) if base_min_float is not None else variant.min_float
+                    if variant.max_float is not None:
+                        base_max_float = max(
+                            base_max_float, variant.max_float) if base_max_float is not None else variant.max_float
 
-                if avg_input_float is not None:
-                    # Filter to only achievable exteriors
+                # Determine which exterior is achievable based on input float
+                achievable_variant = None
+
+                if avg_input_float is not None and base_min_float is not None and base_max_float is not None:
+                    # Calculate the expected output float using the BASE skin's overall range
+                    output_float = FloatCalculator.calculate_output_float(
+                        [avg_input_float] * 10, base_min_float, base_max_float
+                    )
+
+                    # Determine which exterior this float maps to
+                    expected_exterior = FloatCalculator.float_to_exterior(
+                        output_float, base_min_float, base_max_float
+                    )
+
+                    # Find the variant with this exterior
                     for variant in skin_variants:
-                        if variant.min_float is None or variant.max_float is None:
-                            continue
-
-                        # Check if this exterior is achievable given the input float
-                        if FloatCalculator.is_exterior_achievable(
-                            avg_input_float, variant.min_float, variant.max_float, variant.exterior
-                        ):
-                            achievable_variants.append(variant)
+                        if variant.exterior == expected_exterior:
+                            achievable_variant = variant
+                            break
                 else:
-                    # If no float info, include all variants (fallback mode)
-                    achievable_variants = skin_variants
+                    # If no float info, pick the first variant (fallback mode)
+                    achievable_variant = skin_variants[0] if skin_variants else None
 
-                # Add outcomes only for achievable variants
-                for variant in achievable_variants:
-                    if variant.steam_price is None:
-                        continue
-
+                # Add outcome for the single achievable variant
+                if achievable_variant and achievable_variant.steam_price is not None:
                     # Apply liquidity guard
-                    if (variant.availability is not None and
-                            variant.availability < self.min_liquidity):
+                    if (achievable_variant.availability is not None and
+                            achievable_variant.availability < self.min_liquidity):
                         continue
 
                     # Apply sell slippage and fee calculations
                     net_price = self.apply_market_adjustments(
-                        variant.steam_price, is_buying=False)
+                        achievable_variant.steam_price, is_buying=False)
 
                     expected_revenue_contribution = skin_probability * net_price
 
                     outcomes.append(TradeUpOutcome(
-                        market_name=variant.market_name,
+                        market_name=achievable_variant.market_name,
                         collection=collection,
                         probability=skin_probability,
-                        price=variant.steam_price,
+                        price=achievable_variant.steam_price,
                         net_price=net_price,
                         expected_revenue_contribution=expected_revenue_contribution
                     ))

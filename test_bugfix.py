@@ -129,6 +129,50 @@ def test_base_name_extraction():
     print("✅ Base name extraction: PASSED")
 
 
+def test_overall_float_range():
+    """Test that we correctly calculate overall float range from variant ranges."""
+    print("\nTesting overall float range calculation...")
+
+    # Simulate AUG | Midnight Lily which has different ranges per exterior:
+    # FN: [0.00, 0.07], MW: [0.07, 0.15], FT: [0.15, 0.38], WW: [0.38, 0.45], BS: [0.45, 0.60]
+    # Overall range should be: [0.00, 0.60]
+
+    variant_ranges = [
+        (0.00, 0.07),  # FN
+        (0.07, 0.15),  # MW
+        (0.15, 0.38),  # FT
+        (0.38, 0.45),  # WW
+        (0.45, 0.60),  # BS
+    ]
+
+    base_min = min(r[0] for r in variant_ranges)
+    base_max = max(r[1] for r in variant_ranges)
+
+    assert base_min == 0.00
+    assert base_max == 0.60
+
+    # Now test with input float 0.5875
+    avg_input_float = 0.5875
+    output_float = FloatCalculator.calculate_output_float(
+        [avg_input_float] * 10, base_min, base_max
+    )
+
+    # Should be 0.3525 which is Field-Tested (0.15-0.38)
+    expected_output = 0.3525
+    assert abs(output_float - expected_output) < 0.0001
+
+    expected_exterior = FloatCalculator.float_to_exterior(
+        output_float, base_min, base_max)
+    assert expected_exterior == 'Field-Tested'
+
+    print(f"   Variant ranges: {variant_ranges}")
+    print(f"   Overall range: [{base_min}, {base_max}]")
+    print(f"   Input float: {avg_input_float}")
+    print(f"   Output float: {output_float}")
+    print(f"   Expected exterior: {expected_exterior}")
+    print("✅ Overall float range calculation: PASSED")
+
+
 def main():
     """Run all tests."""
     print("=" * 60)
@@ -141,14 +185,16 @@ def main():
         test_exterior_achievability()
         test_probability_distribution()
         test_base_name_extraction()
+        test_overall_float_range()
 
         print("\n" + "=" * 60)
         print("✅ ALL TESTS PASSED!")
         print("=" * 60)
         print("\nThe bug fixes are working correctly:")
         print("  1. ✅ Probabilities calculated per unique skin (not per exterior)")
-        print("  2. ✅ Only achievable exteriors are shown")
-        print("  3. ✅ Float calculations match CS2 mechanics")
+        print("  2. ✅ Only ONE achievable exterior shown per skin")
+        print("  3. ✅ Float calculations use overall skin range (not variant range)")
+        print("  4. ✅ Results match CS2 mechanics")
         print("\nYou can now run analyze_tradeups.py with confidence!")
 
     except AssertionError as e:
