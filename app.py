@@ -484,13 +484,14 @@ def scan():
         if not rarity:
             rarity = 'Mil-Spec'
 
-        # Perform analysis
+        # Perform analysis (with caching enabled)
         results = analyzer.analyze(
             rarity=rarity,
             stattrak=stattrak,
             min_roi=min_roi,
             top=top,
-            assume_input_costs_include_fees=assume_input_costs_include_fees
+            assume_input_costs_include_fees=assume_input_costs_include_fees,
+            use_cache=True  # Always use cache in Flask app for speed
         )
 
         # Apply additional filters
@@ -610,13 +611,29 @@ def internal_error(error):
 
 
 if __name__ == '__main__':
+    import argparse
+
+    # Add argument parsing for precompute option
+    parser = argparse.ArgumentParser(
+        description='CS2 Trade-Up Analyzer Flask Server')
+    parser.add_argument('--precompute', action='store_true',
+                        help='Pre-compute trade-up cache before starting server')
+    args = parser.parse_args()
+
     print("Starting CS2 Trade-Up Analyzer Web Server...")
     print("Initializing analyzer cache...")
 
     # Pre-load the analyzer cache
     try:
-        analyzer_cache.get_analyzer()
+        analyzer = analyzer_cache.get_analyzer()
         print("Cache initialized successfully")
+
+        # Pre-compute trade-up combinations if requested
+        if args.precompute:
+            print("Pre-computing trade-up combinations for faster responses...")
+            analyzer.precompute_cache()
+            print("Pre-computation complete!")
+
     except Exception as e:
         print(f"Warning: Failed to initialize cache: {e}")
         print("Cache will be loaded on first request")
@@ -626,5 +643,8 @@ if __name__ == '__main__':
     print("  GET /health - Health check")
     print("  GET /scan - Analyze trade-ups")
     print("  GET /ui - Web interface")
+
+    if args.precompute:
+        print("\nTrade-up cache has been pre-computed for faster responses!")
 
     app.run(debug=True, host='0.0.0.0', port=5000)

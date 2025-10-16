@@ -5,6 +5,7 @@ A comprehensive tool for analyzing profitable CS2/CS:GO trade-up contracts.
 
 Usage:
     python analyze_tradeups.py --rarity "Mil-Spec" --stattrak false --min_roi 0.05 --max_cost 20.0 --top 50
+    python analyze_tradeups.py --rarity "all" --min_roi 0.10 --top 10  # Analyze all rarities
     python analyze_tradeups.py --float_aware --input_floats 0.03,0.04,0.02,0.01,0.05,0.02,0.03,0.04,0.02,0.01
 """
 
@@ -13,9 +14,10 @@ import json
 import os
 import sys
 import time
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import combinations_with_replacement
+from itertools import combinations_with_replacement, product
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
@@ -206,7 +208,7 @@ class DatabaseLoader:
     PRIMARY_URL = "https://raw.githubusercontent.com/TheLime1/cs2-price-database/refs/heads/main/data/skins_database.json"
     FALLBACK_URL = "https://raw.githubusercontent.com/TheLime1/cs2-price-database/main/data/skins_database.json"
 
-    def __init__(self, cache_path: str = "./.cache/skins_database.json"):
+    def __init__(self, cache_path: str = "./skins_cache/skins_database.json"):
         self.cache_path = Path(cache_path)
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.console = Console()
@@ -540,7 +542,7 @@ class CollectionIndex:
 
 
 class TradeUpCalculator:
-    """Calculates trade-up probabilities and expected values."""
+    """Calculates trade-up probabilities and expected values using TradeUp Ninja brute-force strategy."""
 
     def __init__(self, collection_index: CollectionIndex, assume_input_costs_include_fees: bool = True,
                  buy_slippage_pct: float = 0.0, sell_slippage_pct: float = 0.0,
@@ -574,66 +576,468 @@ class TradeUpCalculator:
 
         return adjusted_price
 
-    def generate_candidates(self, rarity: str, stattrak: bool) -> List[TradeUpCandidate]:
-        """Generate all viable trade-up candidates using database prices and availability."""
+    def get_cheapest_items_per_collection_per_wear(self, rarity: str, stattrak: bool) -> Dict[str, List[Optional[SkinData]]]:
+        """
+        TradeUp Ninja strategy: Get cheapest item per collection per wear condition.
+        Returns Dict[collection_name -> [FN_item, MW_item, FT_item, WW_item, BS_item]]
+        """
         inputs = self.collection_index.get_inputs_by_rarity(rarity, stattrak)
         if not inputs:
-            self.console.print(
-                f"[red]No eligible inputs found for {rarity} (StatTrak: {stattrak})[/red]")
-            return []
+            return {}
 
+        # Group by collection
+        by_collection = {}
+        for skin in inputs:
+            if skin.collection not in by_collection:
+                by_collection[skin.collection] = []
+            by_collection[skin.collection].append(skin)
+
+        # Find cheapest per wear per collection
+        cheapest_per_collection = {}
+        wear_conditions = ['Factory New', 'Minimal Wear',
+                           'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+
+        for collection, skins in by_collection.items():
+            cheapest_items = [None] * 5  # FN, MW, FT, WW, BS
+
+            for skin in skins:
+                if not skin.exterior or not skin.steam_price:
+                    continue
+
+                try:
+                    wear_idx = wear_conditions.index(skin.exterior)
+                    current_cheapest = cheapest_items[wear_idx]
+
+                    # Update if this is cheaper (and has availability if known)
+                    if (current_cheapest is None or
+                            skin.steam_price < current_cheapest.steam_price):
+
+                        # Apply availability filter - prefer items with availability > 0
+                        if skin.availability is None or skin.availability > 0:
+                            cheapest_items[wear_idx] = skin
+                        elif current_cheapest is None:
+                            # Use even if no availability data if we have nothing else
+                            cheapest_items[wear_idx] = skin
+
+                except ValueError:
+                    # Unknown exterior, skip
+                    continue
+
+            # Only include collections that have at least one valid item and valid outputs
+            next_rarity = self.collection_index.get_next_rarity(rarity)
+            if next_rarity and any(cheapest_items):
+                outputs = self.collection_index.get_outputs_by_collection(
+                    collection, next_rarity, stattrak)
+                if outputs:
+                    cheapest_per_collection[collection] = cheapest_items
+
+        return cheapest_per_collection
+
+    def generate_all_combinations_brute_force(self, cheapest_items: Dict[str, List[Optional[SkinData]]],
+                                              max_combinations: int = 1000000, debug: bool = False) -> List[List[SkinData]]:
+        """
+        Generate all possible combinations using TradeUp Ninja brute-force strategy.
+        Tests all collection pairs with all ratios: 10:0, 9:1, 8:2, 7:3, 6:4, 5:5
+        """
+        collections = list(cheapest_items.keys())
+        all_combinations = []
+
+        # Calculate total possible combinations and warn if limit is too low
+        total_single = len([collection for collection in collections
+                           if any(item is not None for item in cheapest_items[collection])])
+
+        total_dual = 0
+        for i, collection1 in enumerate(collections):
+            for j, collection2 in enumerate(collections):
+                if i >= j:
+                    continue
+                items1_count = sum(
+                    1 for item in cheapest_items[collection1] if item is not None)
+                items2_count = sum(
+                    1 for item in cheapest_items[collection2] if item is not None)
+                total_dual += items1_count * items2_count * \
+                    9  # 9 ratio combinations per item pair
+
+        total_possible = total_single + total_dual
+
+        if total_possible > max_combinations:
+            percentage = (max_combinations / total_possible) * 100
+            self.console.print(
+                "[yellow]⚠️  WARNING: Combination limit reached![/yellow]")
+            self.console.print(
+                f"[yellow]   Total possible combinations: {total_possible:,}[/yellow]")
+            self.console.print(
+                f"[yellow]   Max combinations limit: {max_combinations:,}[/yellow]")
+            self.console.print(
+                f"[yellow]   Only analyzing {percentage:.2f}% of all combinations[/yellow]")
+            self.console.print(
+                f"[yellow]   Consider using --max-combinations {total_possible} for complete analysis[/yellow]")
+
+        if debug:
+            self.console.print(
+                f"[debug]Starting combination generation with {len(collections)} collections[/debug]")
+            self.console.print(
+                f"[debug]Total possible combinations: {total_possible:,}[/debug]")
+            for i, collection in enumerate(collections):
+                items_count = sum(
+                    1 for item in cheapest_items[collection] if item is not None)
+                self.console.print(
+                    f"[debug]  Collection {i+1}: {collection} - {items_count} items[/debug]")
+
+        # Single collection (10:0 ratio)
+        if debug:
+            self.console.print(
+                "[debug]Generating single collection combinations (10:0)[/debug]")
+
+        for collection in collections:
+            items = cheapest_items[collection]
+            for item in items:
+                if item is not None:
+                    combination = [item] * 10
+                    all_combinations.append(combination)
+
+                    if len(all_combinations) >= max_combinations:
+                        if debug:
+                            self.console.print(
+                                f"[debug]Reached max combinations limit ({max_combinations})[/debug]")
+                        return all_combinations
+
+        if debug:
+            self.console.print(
+                f"[debug]Single collection combinations: {len(all_combinations)}[/debug]")
+
+        # Dual collection ratios (9:1, 8:2, 7:3, 6:4, 5:5)
+        if debug:
+            self.console.print(
+                "[debug]Generating dual collection combinations[/debug]")
+
+        collection_pairs = 0
+        for i, collection1 in enumerate(collections):
+            for j, collection2 in enumerate(collections):
+                if i >= j:  # Avoid duplicates
+                    continue
+
+                collection_pairs += 1
+                if debug:
+                    self.console.print(
+                        f"[debug]  Processing pair {collection_pairs}: {collection1} x {collection2}[/debug]")
+
+                items1 = cheapest_items[collection1]
+                items2 = cheapest_items[collection2]
+
+                # Test different ratios
+                ratios = [(9, 1), (8, 2), (7, 3), (6, 4), (5, 5)]
+
+                for ratio1, ratio2 in ratios:
+                    # Try collection1:collection2 ratio
+                    for item1 in items1:
+                        if item1 is None:
+                            continue
+                        for item2 in items2:
+                            if item2 is None:
+                                continue
+
+                            combination = [item1] * ratio1 + [item2] * ratio2
+                            all_combinations.append(combination)
+
+                            if len(all_combinations) >= max_combinations:
+                                if debug:
+                                    self.console.print(
+                                        f"[debug]Reached max combinations limit ({max_combinations})[/debug]")
+                                return all_combinations
+
+                    # Try collection2:collection1 ratio (reverse)
+                    if ratio1 != ratio2:  # Skip 5:5 reverse as it's identical
+                        for item1 in items1:
+                            if item1 is None:
+                                continue
+                            for item2 in items2:
+                                if item2 is None:
+                                    continue
+
+                                combination = [item1] * \
+                                    ratio2 + [item2] * ratio1
+                                all_combinations.append(combination)
+
+                                if len(all_combinations) >= max_combinations:
+                                    if debug:
+                                        self.console.print(
+                                            f"[debug]Reached max combinations limit ({max_combinations})[/debug]")
+                                    return all_combinations
+
+        if debug:
+            self.console.print(
+                f"[debug]Total combinations generated: {len(all_combinations)}[/debug]")
+
+        return all_combinations
+
+    def apply_weapon_consistency_rule(self, combination: List[SkinData]) -> List[SkinData]:
+        """
+        Apply Rule 1: Same weapon types must have same wear and unified float constraints.
+        Returns the corrected combination with weapon consistency enforced.
+        """
+        # Count weapons in this combination
+        weapon_counts = {}
+        for skin in combination:
+            weapon_name = skin.market_name.split(
+                ' | ')[0].replace('StatTrak™ ', '')
+            weapon_counts[weapon_name] = weapon_counts.get(weapon_name, 0) + 1
+
+        # Find weapons that appear multiple times
+        multi_weapons = {weapon: count for weapon,
+                         count in weapon_counts.items() if count > 1}
+
+        if not multi_weapons:
+            return combination  # No changes needed
+
+        # For each multi-weapon, ensure all instances use the same variant
+        corrected_combination = []
+        weapon_variant_map = {}
+
+        for skin in combination:
+            weapon_name = skin.market_name.split(
+                ' | ')[0].replace('StatTrak™ ', '')
+
+            if weapon_name in multi_weapons:
+                if weapon_name not in weapon_variant_map:
+                    # First occurrence - establish the variant for this weapon
+                    weapon_variant_map[weapon_name] = skin
+
+                # Use the established variant
+                corrected_combination.append(weapon_variant_map[weapon_name])
+            else:
+                # Single weapon, use as-is
+                corrected_combination.append(skin)
+
+        return corrected_combination
+
+    def generate_candidates(self, rarity: str, stattrak: bool, max_combinations: int = 1000000, debug: bool = False) -> List[TradeUpCandidate]:
+        """Generate all viable trade-up candidates using TradeUp Ninja brute-force strategy."""
         next_rarity = self.collection_index.get_next_rarity(rarity)
         if not next_rarity:
             self.console.print(f"[red]No next rarity found for {rarity}[/red]")
             return []
 
-        # Group inputs by collection and sort by availability + price
-        inputs_by_collection = {}
-        for skin in inputs:
-            if skin.collection not in inputs_by_collection:
-                inputs_by_collection[skin.collection] = []
-            inputs_by_collection[skin.collection].append(skin)
+        # Step 1: Get cheapest items per collection per wear (TradeUp Ninja optimization)
+        cheapest_items = self.get_cheapest_items_per_collection_per_wear(
+            rarity, stattrak)
+        if not cheapest_items:
+            self.console.print(
+                f"[red]No eligible inputs found for {rarity} (StatTrak: {stattrak})[/red]")
+            return []
 
-        # Sort each collection by availability (available first) then by price (cheapest first)
-        # This deprioritizes items with missing/low availability but doesn't exclude them
-        for collection in inputs_by_collection:
-            def sort_key(skin):
-                # Primary sort: availability (higher is better, None treated as 0)
-                availability = skin.availability if skin.availability is not None else 0
-                # Secondary sort: price (lower is better)
-                price = skin.steam_price or float('inf')
-                return (-availability, price)
+        if debug:
+            self.console.print(
+                f"[debug]Found {len(cheapest_items)} collections with valid items[/debug]")
 
-            inputs_by_collection[collection].sort(key=sort_key)
+        # Step 2: Generate all possible combinations (brute-force)
+        self.console.print(
+            f"[yellow]Generating combinations from {len(cheapest_items)} collections (max: {max_combinations})...[/yellow]")
+        all_combinations = self.generate_all_combinations_brute_force(
+            cheapest_items, max_combinations, debug)
 
+        self.console.print(
+            f"[yellow]Testing {len(all_combinations)} combinations...[/yellow]")
+
+        # Step 3: Evaluate each combination
         candidates = []
-        collections = list(inputs_by_collection.keys())
+        processed_count = 0
+        profitable_count = 0
 
-        # Generate composition patterns: (10-0), (8-2), (7-3), (6-4), (5-5)
-        patterns = [
-            [(10, 0)],
-            [(8, 2)],
-            [(7, 3)],
-            [(6, 4)],
-            [(5, 5)]
-        ]
+        for combination in all_combinations:
+            processed_count += 1
 
-        for pattern in patterns:
-            if len(collections) >= len(pattern[0]):
-                for collection_combo in combinations_with_replacement(collections, len(pattern[0])):
-                    for counts in pattern:
-                        if len(counts) == len(collection_combo):
-                            candidate = self._evaluate_composition(
-                                dict(zip(collection_combo, counts)),
-                                inputs_by_collection,
-                                next_rarity,
-                                rarity,
-                                stattrak
-                            )
-                            if candidate:
-                                candidates.append(candidate)
+            # Progress update every 100 combinations
+            if processed_count % 100 == 0:
+                if debug:
+                    self.console.print(
+                        f"[debug]Processed {processed_count}/{len(all_combinations)} combinations, found {profitable_count} profitable...[/debug]")
+                else:
+                    self.console.print(
+                        f"[blue]Processed {processed_count}/{len(all_combinations)} combinations...[/blue]")
 
+            # Apply weapon consistency rule (Rule 1)
+            corrected_combination = self.apply_weapon_consistency_rule(
+                combination)
+
+            # Evaluate this combination
+            candidate = self._evaluate_combination_direct(
+                corrected_combination, next_rarity, rarity, stattrak)
+
+            if candidate and candidate.roi > 0:  # Only keep profitable ones
+                candidates.append(candidate)
+                profitable_count += 1
+
+                if debug and profitable_count % 10 == 0:
+                    self.console.print(
+                        f"[debug]Found {profitable_count} profitable candidates so far[/debug]")
+
+        self.console.print(
+            f"[green]Found {len(candidates)} profitable candidates from {processed_count} combinations[/green]")
         return candidates
+
+    def _evaluate_combination_direct(self, combination: List[SkinData], next_rarity: str,
+                                     input_rarity: str, stattrak: bool) -> Optional[TradeUpCandidate]:
+        """
+        Directly evaluate a specific combination of 10 items.
+        This is the core evaluation method for the brute-force approach.
+        """
+        if len(combination) != 10:
+            return None
+
+        # Calculate total input cost and generate buy recommendations
+        total_cost = 0.0
+        buy_recommendations = []
+
+        # Group identical items for buy recommendations (following Rule 1)
+        item_counts = {}
+        for item in combination:
+            key = item.market_name
+            if key not in item_counts:
+                item_counts[key] = {'item': item, 'count': 0}
+            item_counts[key]['count'] += 1
+
+        # Generate buy recommendations with proper float handling
+        for item_data in item_counts.values():
+            item = item_data['item']
+            quantity = item_data['count']
+
+            cost = item.steam_price or 0.0
+            if not self.assume_input_costs_include_fees:
+                cost = SteamFeeCalculator.list_price_for_net(cost)
+
+            # Apply buy slippage
+            cost = self.apply_market_adjustments(cost, is_buying=True)
+            total_cost += cost * quantity
+
+            # Calculate recommended float
+            recommended_float = None
+            if item.min_float is not None and item.max_float is not None:
+                float_range = item.max_float - item.min_float
+                recommended_float = item.min_float + (float_range * 0.25)
+
+            buy_recommendations.append(BuyRecommendation(
+                market_name=item.market_name,
+                collection=item.collection,
+                price=item.steam_price or 0.0,
+                recommended_float=recommended_float,
+                quantity=quantity
+            ))
+
+        # Apply unified float constraints for same weapons (Rule 1)
+        weapon_float_map = {}
+        for rec in buy_recommendations:
+            weapon_name = rec.market_name.split(
+                ' | ')[0].replace('StatTrak™ ', '')
+            if weapon_name not in weapon_float_map:
+                weapon_float_map[weapon_name] = rec.recommended_float
+            elif rec.recommended_float is not None and weapon_float_map[weapon_name] is not None:
+                weapon_float_map[weapon_name] = max(
+                    weapon_float_map[weapon_name], rec.recommended_float)
+
+        # Apply unified constraints
+        for rec in buy_recommendations:
+            weapon_name = rec.market_name.split(
+                ' | ')[0].replace('StatTrak™ ', '')
+            if weapon_name in weapon_float_map:
+                rec.recommended_float = weapon_float_map[weapon_name]
+
+        # Calculate average input float
+        avg_input_float = None
+        recommended_floats = []
+        for rec in buy_recommendations:
+            if rec.recommended_float is not None:
+                recommended_floats.extend(
+                    [rec.recommended_float] * rec.quantity)
+        if len(recommended_floats) == 10:
+            avg_input_float = sum(recommended_floats) / len(recommended_floats)
+
+        # Calculate outcomes by collection
+        outcomes = []
+        composition = {}  # collection -> count
+        for item in combination:
+            composition[item.collection] = composition.get(
+                item.collection, 0) + 1
+
+        for collection, count in composition.items():
+            outputs = self.collection_index.get_outputs_by_collection(
+                collection, next_rarity, stattrak)
+            if not outputs:
+                continue
+
+            collection_prob = count / 10.0
+            num_outputs = len(outputs)
+
+            for output in outputs:
+                if output.steam_price is None:
+                    continue
+
+                # Apply liquidity guard
+                if (output.availability is not None and output.availability < self.min_liquidity):
+                    continue
+
+                # Handle float-aware pricing
+                net_price = output.steam_price
+                if avg_input_float is not None and output.min_float is not None and output.max_float is not None:
+                    output_float = FloatCalculator.calculate_output_float(
+                        [avg_input_float] * 10, output.min_float, output.max_float
+                    )
+                    target_exterior = FloatCalculator.float_to_exterior(
+                        output_float, output.min_float, output.max_float
+                    )
+
+                    # Try to find matching exterior for better price accuracy
+                    for potential_output in outputs:
+                        if potential_output.exterior == target_exterior and potential_output.steam_price:
+                            net_price = potential_output.steam_price
+                            break
+
+                # Apply sell adjustments
+                net_price = self.apply_market_adjustments(
+                    net_price, is_buying=False)
+
+                probability = collection_prob / num_outputs
+                expected_revenue_contribution = probability * net_price
+
+                outcomes.append(TradeUpOutcome(
+                    market_name=output.market_name,
+                    collection=collection,
+                    probability=probability,
+                    price=output.steam_price,
+                    net_price=net_price,
+                    expected_revenue_contribution=expected_revenue_contribution
+                ))
+
+        if not outcomes:
+            return None
+
+        # Calculate metrics
+        expected_value = sum(
+            outcome.expected_revenue_contribution for outcome in outcomes) - total_cost
+        roi = expected_value / total_cost if total_cost > 0 else 0.0
+
+        # Calculate success rate
+        profitable_outcomes = [
+            o for o in outcomes if o.net_price >= total_cost]
+        success_rate = sum(
+            o.probability for o in profitable_outcomes) if profitable_outcomes else 0.0
+
+        # Filter composition for display (only non-zero counts)
+        filtered_composition = {coll: count for coll,
+                                count in composition.items() if count > 0}
+
+        return TradeUpCandidate(
+            inputs=filtered_composition,
+            total_cost=total_cost,
+            outcomes=outcomes,
+            expected_value=expected_value,
+            roi=roi,
+            rarity=input_rarity,
+            stattrak=stattrak,
+            buy_recommendations=buy_recommendations,
+            avg_input_float=avg_input_float,
+            success_rate=success_rate
+        )
 
     def _evaluate_composition(self, composition: Dict[str, int], inputs_by_collection: Dict[str, List[SkinData]],
                               next_rarity: str, input_rarity: str, stattrak: bool) -> Optional[TradeUpCandidate]:
@@ -818,8 +1222,12 @@ class TradeUpCalculator:
         success_rate = sum(
             o.probability for o in profitable_outcomes) if profitable_outcomes else 0.0
 
+        # Filter out collections with 0 inputs from display
+        filtered_composition = {coll: count for coll,
+                                count in composition.items() if count > 0}
+
         return TradeUpCandidate(
-            inputs=composition,
+            inputs=filtered_composition,
             total_cost=total_cost,
             outcomes=outcomes,
             expected_value=expected_value,
@@ -832,15 +1240,212 @@ class TradeUpCalculator:
         )
 
 
+class TradeUpCache:
+    """Manages caching of pre-computed trade-up results for fast Flask responses."""
+
+    def __init__(self, cache_dir: str = "./tradeup_cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.console = Console()
+
+    def get_cache_key(self, rarity: str, stattrak: bool, params: Dict) -> str:
+        """Generate cache key based on analysis parameters."""
+        # Create deterministic hash of parameters
+        param_str = f"{rarity}_{stattrak}_{params.get('assume_input_costs_include_fees', True)}"
+        param_str += f"_{params.get('buy_slippage_pct', 0.0)}_{params.get('sell_slippage_pct', 0.0)}"
+        param_str += f"_{params.get('custom_fee_rate', 'None')}_{params.get('min_liquidity', 1)}"
+
+        return hashlib.md5(param_str.encode()).hexdigest()[:16]
+
+    def get_cache_path(self, cache_key: str) -> Path:
+        """Get the full path for a cache file."""
+        return self.cache_dir / f"tradeups_{cache_key}.json"
+
+    def is_cache_valid(self, cache_key: str, max_age_hours: int = 24) -> bool:
+        """Check if cached results are still valid."""
+        cache_path = self.get_cache_path(cache_key)
+
+        if not cache_path.exists():
+            return False
+
+        cache_age = time.time() - cache_path.stat().st_mtime
+        return cache_age < max_age_hours * 3600
+
+    def save_results(self, cache_key: str, results: List[TradeUpCandidate],
+                     rarity: str, stattrak: bool) -> None:
+        """Save analysis results to cache."""
+        cache_path = self.get_cache_path(cache_key)
+
+        # Convert TradeUpCandidate objects to serializable format
+        serializable_results = []
+        for candidate in results:
+            serializable_results.append({
+                'inputs': candidate.inputs,
+                'total_cost': candidate.total_cost,
+                'expected_value': candidate.expected_value,
+                'roi': candidate.roi,
+                'rarity': candidate.rarity,
+                'stattrak': candidate.stattrak,
+                'avg_input_float': candidate.avg_input_float,
+                'success_rate': candidate.success_rate,
+                'outcomes': [
+                    {
+                        'market_name': outcome.market_name,
+                        'collection': outcome.collection,
+                        'probability': outcome.probability,
+                        'price': outcome.price,
+                        'net_price': outcome.net_price,
+                        'expected_revenue_contribution': outcome.expected_revenue_contribution
+                    }
+                    for outcome in candidate.outcomes
+                ],
+                'buy_recommendations': [
+                    {
+                        'market_name': rec.market_name,
+                        'collection': rec.collection,
+                        'price': rec.price,
+                        'recommended_float': rec.recommended_float,
+                        'quantity': rec.quantity
+                    }
+                    for rec in (candidate.buy_recommendations or [])
+                ]
+            })
+
+        cache_data = {
+            'rarity': rarity,
+            'stattrak': stattrak,
+            'timestamp': time.time(),
+            'results': serializable_results
+        }
+
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, indent=2)
+
+        self.console.print(
+            f"[green]Cached {len(results)} results to {cache_path.name}[/green]")
+
+    def load_results(self, cache_key: str) -> Optional[List[TradeUpCandidate]]:
+        """Load cached results and convert back to TradeUpCandidate objects."""
+        cache_path = self.get_cache_path(cache_key)
+
+        if not cache_path.exists():
+            return None
+
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            # Convert back to TradeUpCandidate objects
+            results = []
+            for item in cache_data['results']:
+                # Reconstruct outcomes
+                outcomes = [
+                    TradeUpOutcome(
+                        market_name=outcome['market_name'],
+                        collection=outcome['collection'],
+                        probability=outcome['probability'],
+                        price=outcome['price'],
+                        net_price=outcome['net_price'],
+                        expected_revenue_contribution=outcome['expected_revenue_contribution']
+                    )
+                    for outcome in item['outcomes']
+                ]
+
+                # Reconstruct buy recommendations
+                buy_recommendations = [
+                    BuyRecommendation(
+                        market_name=rec['market_name'],
+                        collection=rec['collection'],
+                        price=rec['price'],
+                        recommended_float=rec['recommended_float'],
+                        quantity=rec['quantity']
+                    )
+                    for rec in item['buy_recommendations']
+                ]
+
+                candidate = TradeUpCandidate(
+                    inputs=item['inputs'],
+                    total_cost=item['total_cost'],
+                    outcomes=outcomes,
+                    expected_value=item['expected_value'],
+                    roi=item['roi'],
+                    rarity=item['rarity'],
+                    stattrak=item['stattrak'],
+                    buy_recommendations=buy_recommendations,
+                    avg_input_float=item['avg_input_float'],
+                    success_rate=item['success_rate']
+                )
+                results.append(candidate)
+
+            self.console.print(
+                f"[green]Loaded {len(results)} cached results from {cache_path.name}[/green]")
+            return results
+
+        except Exception as e:
+            self.console.print(
+                f"[red]Failed to load cache {cache_path.name}: {e}[/red]")
+            return None
+
+    def precompute_all_combinations(self, analyzer: 'TradeUpAnalyzer') -> None:
+        """Pre-compute all profitable trade-ups for common parameter combinations."""
+        self.console.print(
+            "[bold yellow]Pre-computing trade-up combinations for caching...[/bold yellow]")
+
+        # Define common parameter combinations to pre-compute
+        rarities = ['Industrial', 'Mil-Spec', 'Restricted', 'Classified']
+        stattrak_options = [False, True]
+
+        param_combinations = [
+            {'assume_input_costs_include_fees': True, 'buy_slippage_pct': 0.0,
+             'sell_slippage_pct': 0.0, 'custom_fee_rate': None, 'min_liquidity': 1}
+        ]
+
+        total_combinations = len(
+            rarities) * len(stattrak_options) * len(param_combinations)
+        current = 0
+
+        for rarity in rarities:
+            for stattrak in stattrak_options:
+                for params in param_combinations:
+                    current += 1
+                    cache_key = self.get_cache_key(rarity, stattrak, params)
+
+                    # Skip if already cached and valid
+                    if self.is_cache_valid(cache_key):
+                        self.console.print(
+                            f"[blue]Skipping {rarity} StatTrak:{stattrak} (cached)[/blue]")
+                        continue
+
+                    self.console.print(
+                        f"[yellow]Computing {current}/{total_combinations}: {rarity} StatTrak:{stattrak}[/yellow]")
+
+                    # Run analysis
+                    results = analyzer.analyze(
+                        rarity=rarity,
+                        stattrak=stattrak,
+                        min_roi=0.0,  # Capture all profitable trades
+                        top=1000,     # Large number to capture all results
+                        **params
+                    )
+
+                    # Cache results
+                    self.save_results(cache_key, results, rarity, stattrak)
+
+        self.console.print(
+            "[bold green]Pre-computation complete![/bold green]")
+
+
 class TradeUpAnalyzer:
     """Main analyzer class that orchestrates the trade-up analysis."""
 
-    def __init__(self, cache_path: str = "./.cache/skins_database.json"):
+    def __init__(self, cache_path: str = "./skins_cache/skins_database.json"):
         self.cache_path = cache_path
         self.console = Console()
         self.database_loader = DatabaseLoader(cache_path)
         self.skins = []
         self.collection_index = None
+        # Trade-up cache goes to separate directory
+        self.tradeup_cache = TradeUpCache("./tradeup_cache")
 
     def load_data(self, force_refresh: bool = False, allow_consumer_inputs: bool = True) -> None:
         """Load and normalize skin data."""
@@ -883,18 +1488,64 @@ class TradeUpAnalyzer:
     def analyze(self, rarity: str, stattrak: bool = False, min_roi: float = 0.0,
                 top: int = 25, assume_input_costs_include_fees: bool = True, max_cost: float = 0.0,
                 buy_slippage_pct: float = 0.0, sell_slippage_pct: float = 0.0,
-                custom_fee_rate: Optional[float] = None, min_liquidity: int = 1) -> List[TradeUpCandidate]:
-        """Perform trade-up analysis using database prices and availability."""
+                custom_fee_rate: Optional[float] = None, min_liquidity: int = 1,
+                use_cache: bool = True, max_combinations: int = 1000000, debug: bool = False) -> List[TradeUpCandidate]:
+        """Perform trade-up analysis using database prices and availability with caching."""
         if not self.collection_index:
             raise ValueError("Data not loaded. Call load_data() first.")
 
+        # Prepare cache parameters
+        cache_params = {
+            'assume_input_costs_include_fees': assume_input_costs_include_fees,
+            'buy_slippage_pct': buy_slippage_pct,
+            'sell_slippage_pct': sell_slippage_pct,
+            'custom_fee_rate': custom_fee_rate,
+            'min_liquidity': min_liquidity
+        }
+
+        # Try to load from cache first
+        if use_cache:
+            cache_key = self.tradeup_cache.get_cache_key(
+                rarity, stattrak, cache_params)
+
+            if self.tradeup_cache.is_cache_valid(cache_key):
+                self.console.print(
+                    f"[green]Loading from cache for {rarity} StatTrak:{stattrak}[/green]")
+                cached_results = self.tradeup_cache.load_results(cache_key)
+
+                if cached_results:
+                    # Apply filters to cached results
+                    profitable = [
+                        c for c in cached_results if c.roi >= min_roi]
+                    if max_cost > 0:
+                        profitable = [
+                            c for c in profitable if c.total_cost <= max_cost]
+
+                    # Sort by expected value (descending)
+                    profitable.sort(
+                        key=lambda x: x.expected_value, reverse=True)
+
+                    self.console.print(
+                        f"[green]Returning {len(profitable[:top])} cached results[/green]")
+                    return profitable[:top]
+
+        # Cache miss or disabled - perform full analysis
         self.console.print(
             f"[bold blue]Analyzing {rarity} trade-ups (StatTrak: {stattrak})[/bold blue]")
 
         calculator = TradeUpCalculator(
             self.collection_index, assume_input_costs_include_fees,
             buy_slippage_pct, sell_slippage_pct, custom_fee_rate, min_liquidity)
-        candidates = calculator.generate_candidates(rarity, stattrak)
+
+        candidates = calculator.generate_candidates(
+            rarity, stattrak, max_combinations, debug)
+
+        # Cache the raw results (before filtering) for future use
+        if use_cache and candidates:
+            cache_key = self.tradeup_cache.get_cache_key(
+                rarity, stattrak, cache_params)
+            self.tradeup_cache.save_results(
+                cache_key, candidates, rarity, stattrak)
 
         # Filter by minimum ROI and maximum cost
         profitable = [c for c in candidates if c.roi >= min_roi]
@@ -906,8 +1557,14 @@ class TradeUpAnalyzer:
 
         self.console.print(
             f"[green]Found {len(profitable)} profitable trade-ups[/green]")
-
         return profitable[:top]
+
+    def precompute_cache(self) -> None:
+        """Pre-compute all trade-up combinations for faster Flask responses."""
+        if not self.collection_index:
+            raise ValueError("Data not loaded. Call load_data() first.")
+
+        self.tradeup_cache.precompute_all_combinations(self)
 
     def print_results(self, candidates: List[TradeUpCandidate]) -> None:
         """Print analysis results in a formatted table."""
@@ -1007,6 +1664,7 @@ def main():
 Examples:
   python analyze_tradeups.py --rarity "Mil-Spec" --stattrak false --min_roi 0.05 --top 50
   python analyze_tradeups.py --rarity "Restricted" --min_roi 0.10 --top 25
+  python analyze_tradeups.py --rarity "all" --min_roi 0.15 --top 10  # Analyze all rarities
   python analyze_tradeups.py --assume_input_costs_include_fees true
         """
     )
@@ -1014,8 +1672,8 @@ Examples:
     parser.add_argument(
         '--rarity',
         required=True,
-        choices=['Industrial', 'Mil-Spec', 'Restricted', 'Classified'],
-        help='Input rarity tier for trade-up'
+        choices=['Industrial', 'Mil-Spec', 'Restricted', 'Classified', 'all'],
+        help='Input rarity tier for trade-up (use "all" to analyze all rarities)'
     )
 
     parser.add_argument(
@@ -1078,7 +1736,7 @@ Examples:
         '--custom_fee_rate',
         type=float,
         default=None,
-        help='Custom fee rate percentage (overrides Steam\'s 15%, e.g. 10.0 for 10%)'
+        help='Custom fee rate percentage (overrides Steam\'s 15%%, e.g. 10.0 for 10%%)'
     )
 
     parser.add_argument(
@@ -1090,7 +1748,7 @@ Examples:
 
     parser.add_argument(
         '--cache_path',
-        default='./.cache/skins_database.json',
+        default='./skins_cache/skins_database.json',
         help='Path to database cache file'
     )
 
@@ -1098,6 +1756,31 @@ Examples:
         '--force_refresh',
         action='store_true',
         help='Force refresh of cached database'
+    )
+
+    parser.add_argument(
+        '--precompute_cache',
+        action='store_true',
+        help='Pre-compute all trade-up combinations for faster Flask responses'
+    )
+
+    parser.add_argument(
+        '--no_cache',
+        action='store_true',
+        help='Disable caching (force fresh analysis)'
+    )
+
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug output for detailed progress tracking'
+    )
+
+    parser.add_argument(
+        '--max_combinations',
+        type=int,
+        default=1000000,
+        help='Maximum number of combinations to test (default: 1,000,000)'
     )
 
     args = parser.parse_args()
@@ -1109,22 +1792,64 @@ Examples:
         # Load data
         analyzer.load_data(args.force_refresh, args.allow_consumer_inputs)
 
-        # Perform analysis
-        results = analyzer.analyze(
-            rarity=args.rarity,
-            stattrak=args.stattrak,
-            min_roi=args.min_roi,
-            max_cost=args.max_cost,
-            top=args.top,
-            assume_input_costs_include_fees=args.assume_input_costs_include_fees,
-            buy_slippage_pct=args.buy_slippage_pct,
-            sell_slippage_pct=args.sell_slippage_pct,
-            custom_fee_rate=args.custom_fee_rate,
-            min_liquidity=args.min_liquidity
-        )
+        # Handle precompute cache option
+        if args.precompute_cache:
+            analyzer.precompute_cache()
+            return
 
-        # Print results
-        analyzer.print_results(results)
+        # Handle "all" rarity case
+        if args.rarity == "all":
+            all_rarities = ['Industrial', 'Mil-Spec',
+                            'Restricted', 'Classified']
+            all_results = []
+
+            for rarity in all_rarities:
+                analyzer.console.print(
+                    f"\n[bold cyan]Analyzing {rarity} rarity...[/bold cyan]")
+                results = analyzer.analyze(
+                    rarity=rarity,
+                    stattrak=args.stattrak,
+                    min_roi=args.min_roi,
+                    max_cost=args.max_cost,
+                    top=args.top,  # Use full top for each rarity, will sort later
+                    assume_input_costs_include_fees=args.assume_input_costs_include_fees,
+                    buy_slippage_pct=args.buy_slippage_pct,
+                    sell_slippage_pct=args.sell_slippage_pct,
+                    custom_fee_rate=args.custom_fee_rate,
+                    min_liquidity=args.min_liquidity,
+                    use_cache=not args.no_cache,
+                    max_combinations=args.max_combinations,
+                    debug=args.debug
+                )
+                all_results.extend(results)
+
+            # Sort all results by expected value and take top N
+            all_results.sort(key=lambda x: x.expected_value, reverse=True)
+            final_results = all_results[:args.top]
+
+            analyzer.console.print(
+                f"\n[bold green]Combined results from all rarities (top {args.top}):[/bold green]")
+            analyzer.print_results(final_results)
+        else:
+            # Perform analysis for single rarity
+            results = analyzer.analyze(
+                rarity=args.rarity,
+                stattrak=args.stattrak,
+                min_roi=args.min_roi,
+                max_cost=args.max_cost,
+                top=args.top,
+                assume_input_costs_include_fees=args.assume_input_costs_include_fees,
+                buy_slippage_pct=args.buy_slippage_pct,
+                sell_slippage_pct=args.sell_slippage_pct,
+                custom_fee_rate=args.custom_fee_rate,
+                min_liquidity=args.min_liquidity,
+                use_cache=not args.no_cache,
+                max_combinations=args.max_combinations,
+                debug=args.debug
+            )
+
+            # Print results
+            analyzer.print_results(results)
 
     except Exception as e:
         console = Console()
