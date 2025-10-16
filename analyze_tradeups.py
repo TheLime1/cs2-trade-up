@@ -552,14 +552,25 @@ class TradeUpCalculator:
             if len(available) < count:
                 return None
 
-            # Take cheapest items and create buy recommendations
+            # Simple rule: same weapon = same wear level
             collection_items = []
+            selected_weapons = {}  # Track which specific variant we chose for each weapon
+            
             for i in range(count):
-                # Cycle through available items if needed
                 skin = available[i % len(available)]
+                
+                # Extract weapon name
+                weapon_name = skin.market_name.split(' | ')[0].replace('StatTrak™ ', '')
+                
+                # If we've seen this weapon before, use the same variant
+                if weapon_name in selected_weapons:
+                    skin = selected_weapons[weapon_name]
+                else:
+                    # First time seeing this weapon, record our choice
+                    selected_weapons[weapon_name] = skin
+                
                 cost = skin.steam_price or 0.0
                 if not self.assume_input_costs_include_fees:
-                    # If prices don't include fees, we need to add them
                     cost = SteamFeeCalculator.list_price_for_net(cost)
 
                 total_cost += cost
@@ -593,6 +604,30 @@ class TradeUpCalculator:
                     recommended_float=recommended_float,
                     quantity=quantity
                 ))
+
+        # Apply unified float constraints for same weapons
+        weapon_float_map = {}
+        
+        # First pass: determine the LEAST restrictive (highest) float for each weapon
+        # This ensures all items of the same weapon are actually obtainable
+        for rec in buy_recommendations:
+            # Extract weapon name from market name (e.g., "Nova | Blaze Orange (Field-Tested)" -> "Nova")
+            weapon_name = rec.market_name.split(' | ')[0].replace('StatTrak™ ', '')
+            
+            if weapon_name not in weapon_float_map:
+                weapon_float_map[weapon_name] = rec.recommended_float
+            elif rec.recommended_float is not None and weapon_float_map[weapon_name] is not None:
+                # Use the less restrictive (higher) float for all items of this weapon
+                weapon_float_map[weapon_name] = max(weapon_float_map[weapon_name], rec.recommended_float)
+        
+        # Second pass: apply unified float constraints
+        for rec in buy_recommendations:
+            weapon_name = rec.market_name.split(' | ')[0].replace('StatTrak™ ', '')
+            if weapon_name in weapon_float_map:
+                rec.recommended_float = weapon_float_map[weapon_name]
+        
+        # Since we ensure same weapon = same wear, no grouping needed
+        # Just keep the original buy_recommendations as they are
 
         if len(selected_inputs) != 10:
             return None

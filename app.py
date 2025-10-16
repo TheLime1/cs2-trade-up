@@ -334,22 +334,38 @@ HTML_TEMPLATE = """
                         <!-- Buy Recommendations -->
                         ${result.buy_recommendations && result.buy_recommendations.length > 0 ? `
                         <div class="mb-6">
-                            <h4 class="font-medium text-gray-200 mb-3">Items to Buy</h4>
+                            <h4 class="font-medium text-gray-200 mb-3">Input Items</h4>
                             <div class="space-y-2">
                                 ${result.buy_recommendations.map(rec => {
                                     const floatInfo = rec.recommended_float ? `, float≤${rec.recommended_float.toFixed(3)}` : '';
                                     const quantityText = rec.quantity > 1 ? `${rec.quantity} x ` : '';
-                                    const totalPrice = rec.price * rec.quantity;
-                                    const totalInfo = rec.quantity > 1 ? ` (Total: $${totalPrice.toFixed(2)})` : '';
+                                    
+                                    // Extract wear level from market name if present
+                                    const wearMatch = rec.market_name.match(/\((Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)\)/);
+                                    const wear = wearMatch ? wearMatch[1] : '';
+                                    
+                                    // Create the display format: "3 x StatTrak™ MP9 Featherweight [Minimal Wear, $0.29, float≤0.13]"
+                                    let displayName = rec.market_name;
+                                    let priceAndDetails = '';
+                                    
+                                    if (wear) {
+                                        // Remove wear from main name and put it in brackets with price and float
+                                        displayName = rec.market_name.replace(/\s*\([^)]+\)/, '');
+                                        priceAndDetails = `[${wear}, $${rec.price.toFixed(2)}${floatInfo}]`;
+                                    } else {
+                                        priceAndDetails = `[$${rec.price.toFixed(2)}${floatInfo}]`;
+                                    }
                                     
                                     return `
                                         <div class="flex items-center justify-between bg-blue-900 border border-blue-600 rounded-lg p-3">
-                                            <div>
-                                                <span class="text-blue-300 font-medium">${quantityText}</span>
-                                                <span class="font-semibold text-white">${rec.market_name}</span>
-                                                <span class="text-sm text-gray-300">$${rec.price.toFixed(2)}${floatInfo}${totalInfo}</span>
+                                            <div class="flex-1">
+                                                <div class="text-white">
+                                                    <span class="text-blue-300 font-medium">${quantityText}</span>
+                                                    <span class="font-semibold">${displayName}</span>
+                                                    <span class="text-yellow-300 font-medium ml-2">${priceAndDetails}</span>
+                                                </div>
                                             </div>
-                                            <button class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">
+                                            <button class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 ml-3">
                                                 Buy
                                             </button>
                                         </div>
