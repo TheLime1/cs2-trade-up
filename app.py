@@ -69,17 +69,18 @@ HTML_TEMPLATE = """
             <div class="bg-gray-800 rounded-lg border border-gray-600 p-6 mb-8">
                 <form id="analysisForm" class="space-y-6">
                     <!-- Top row filters -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <!-- Cost Filter -->
                         <div>
                             <label class="block text-sm font-medium text-gray-300 mb-2">Cost</label>
                             <select id="cost_range" name="cost_range" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
                                 <option value="">All Costs</option>
-                                <option value="0-50">$0 - $50</option>
-                                <option value="50-100">$50 - $100</option>
-                                <option value="100-200">$100 - $200</option>
-                                <option value="200-500">$200 - $500</option>
-                                <option value="500+">$500+</option>
+                                <option value="0-5">$0 - $5</option>
+                                <option value="5-10">$5 - $10</option>
+                                <option value="10-20">$10 - $20</option>
+                                <option value="20-30">$20 - $30</option>
+                                <option value="30-50">$30 - $50</option>
+                                <option value="50+">$50+</option>
                             </select>
                         </div>
                         
@@ -96,13 +97,6 @@ HTML_TEMPLATE = """
                         <div>
                             <label class="block text-sm font-medium text-gray-300 mb-2">Min. Profit %</label>
                             <input type="number" id="min_roi" name="min_roi" value="0" step="1" placeholder="e.g. 120"
-                                   class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white placeholder-gray-400">
-                        </div>
-                        
-                        <!-- Min Success % -->
-                        <div>
-                            <label class="block text-sm font-medium text-gray-300 mb-2">Min. Success %</label>
-                            <input type="number" id="min_success_rate" name="min_success_rate" value="0" step="1" placeholder="e.g. 60"
                                    class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white placeholder-gray-400">
                         </div>
                         
@@ -129,8 +123,6 @@ HTML_TEMPLATE = """
                                 <option value="lowest_cost">Lowest Input Cost</option>
                                 <option value="highest_ev">Highest Expected Value</option>
                                 <option value="lowest_ev">Lowest Expected Value</option>
-                                <option value="lowest_risk">Lowest Risk (High Success Rate)</option>
-                                <option value="highest_risk">Highest Risk (Low Success Rate)</option>
                             </select>
                         </div>
                         
@@ -138,10 +130,13 @@ HTML_TEMPLATE = """
                         <div>
                             <label class="block text-sm font-medium text-gray-300 mb-2">Rarity</label>
                             <select id="rarity" name="rarity" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
+                                <option value="" selected>All Rarities</option>
+                                <option value="Consumer">Consumer Grade</option>
                                 <option value="Industrial">Industrial Grade</option>
-                                <option value="Mil-Spec" selected>Mil-Spec Grade</option>
+                                <option value="Mil-Spec">Mil-Spec Grade</option>
                                 <option value="Restricted">Restricted</option>
                                 <option value="Classified">Classified</option>
+                                <option value="Covert">Covert</option>
                             </select>
                         </div>
                         
@@ -219,29 +214,29 @@ HTML_TEMPLATE = """
             const costRange = params.get('cost_range');
             if (costRange) {
                 params.delete('cost_range');
-                if (costRange === '0-50') {
+                if (costRange === '0-5') {
                     params.set('min_cost', '0');
+                    params.set('max_cost', '5');
+                } else if (costRange === '5-10') {
+                    params.set('min_cost', '5');
+                    params.set('max_cost', '10');
+                } else if (costRange === '10-20') {
+                    params.set('min_cost', '10');
+                    params.set('max_cost', '20');
+                } else if (costRange === '20-30') {
+                    params.set('min_cost', '20');
+                    params.set('max_cost', '30');
+                } else if (costRange === '30-50') {
+                    params.set('min_cost', '30');
                     params.set('max_cost', '50');
-                } else if (costRange === '50-100') {
+                } else if (costRange === '50+') {
                     params.set('min_cost', '50');
-                    params.set('max_cost', '100');
-                } else if (costRange === '100-200') {
-                    params.set('min_cost', '100');
-                    params.set('max_cost', '200');
-                } else if (costRange === '200-500') {
-                    params.set('min_cost', '200');
-                    params.set('max_cost', '500');
-                } else if (costRange === '500+') {
-                    params.set('min_cost', '500');
                 }
             }
             
             // Convert percentages from whole numbers to decimals
             const minRoi = parseFloat(params.get('min_roi') || '0') / 100;
             params.set('min_roi', minRoi.toString());
-            
-            const minSuccessRate = parseFloat(params.get('min_success_rate') || '0') / 100;
-            params.set('min_success_rate', minSuccessRate.toString());
             
             // Show loading
             document.getElementById('loading').classList.remove('hidden');
@@ -291,45 +286,49 @@ HTML_TEMPLATE = """
                 
                 html += `
                     <div class="bg-gray-800 border border-gray-600 rounded-lg p-6 mb-6">
+                        <!-- Collections header -->
                         <div class="mb-4">
-                            <h3 class="text-xl font-semibold text-white mb-2">Trade-up #${index + 1}</h3>
-                            <p class="text-sm text-gray-300"><strong>Collections:</strong> ${composition}</p>
+                            <h4 class="text-sm font-medium text-gray-300 mb-2">Collections:</h4>
+                            <p class="text-white font-medium">${composition}</p>
                         </div>
                         
-                        <!-- Key Metrics Grid -->
+                        <!-- Key Metrics Grid - 6 cards without Success Rate -->
                         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-                            <div class="bg-blue-900 border border-blue-600 rounded-lg p-3">
-                                <div class="text-xs text-blue-300 font-medium uppercase">Rarity</div>
+                            <!-- 1. Rarity -->
+                            <div class="bg-blue-900 border-l-4 border-blue-400 rounded-lg p-3">
+                                <div class="text-xs text-blue-300 font-medium uppercase">Rarity:</div>
                                 <div class="text-sm font-semibold text-blue-100">${result.inputs.rarity}</div>
                             </div>
-                            ${result.inputs.avg_input_float ? `
-                            <div class="bg-gray-700 border border-gray-500 rounded-lg p-3">
-                                <div class="text-xs text-gray-300 font-medium uppercase">Avg Input Float</div>
-                                <div class="text-sm font-semibold text-gray-100">${result.inputs.avg_input_float.toFixed(4)}</div>
+                            
+                            <!-- 2. Avg Input Float -->
+                            <div class="bg-gray-700 border-l-4 border-gray-400 rounded-lg p-3">
+                                <div class="text-xs text-gray-300 font-medium uppercase">Avg Input Float:</div>
+                                <div class="text-sm font-semibold text-gray-100">${result.inputs.avg_input_float ? result.inputs.avg_input_float.toFixed(4) : 'N/A'}</div>
                             </div>
-                            ` : ''}
-                            <div class="bg-yellow-900 border border-yellow-600 rounded-lg p-3">
-                                <div class="text-xs text-yellow-300 font-medium uppercase">Input Cost</div>
+                            
+                            <!-- 3. Input Cost -->
+                            <div class="bg-yellow-900 border-l-4 border-yellow-400 rounded-lg p-3">
+                                <div class="text-xs text-yellow-300 font-medium uppercase">Input Cost:</div>
                                 <div class="text-sm font-semibold text-yellow-100">$${result.inputs.total_cost.toFixed(2)}</div>
                             </div>
-                            <div class="bg-orange-900 border border-orange-600 rounded-lg p-3">
-                                <div class="text-xs text-orange-300 font-medium uppercase">Expected Value</div>
+                            
+                            <!-- 4. Expected Value -->
+                            <div class="bg-orange-900 border-l-4 border-orange-400 rounded-lg p-3">
+                                <div class="text-xs text-orange-300 font-medium uppercase">Expected Value:</div>
                                 <div class="text-sm font-semibold text-orange-100">$${(result.ev + result.inputs.total_cost).toFixed(2)}</div>
                             </div>
-                            <div class="bg-green-900 border border-green-600 rounded-lg p-3">
-                                <div class="text-xs text-green-300 font-medium uppercase">Profit</div>
+                            
+                            <!-- 5. Profit -->
+                            <div class="bg-green-900 border-l-4 border-green-400 rounded-lg p-3">
+                                <div class="text-xs text-green-300 font-medium uppercase">Profit:</div>
                                 <div class="text-sm font-semibold text-green-100">$${result.ev.toFixed(2)}</div>
                             </div>
-                            <div class="bg-cyan-900 border border-cyan-600 rounded-lg p-3">
-                                <div class="text-xs text-cyan-300 font-medium uppercase">Profitability</div>
+                            
+                            <!-- 6. Profitability -->
+                            <div class="bg-cyan-900 border-l-4 border-cyan-400 rounded-lg p-3">
+                                <div class="text-xs text-cyan-300 font-medium uppercase">Profitability:</div>
                                 <div class="text-sm font-semibold text-cyan-100">${(result.roi * 100).toFixed(2)}%</div>
                             </div>
-                            ${result.inputs.success_rate ? `
-                            <div class="bg-teal-900 border border-teal-600 rounded-lg p-3">
-                                <div class="text-xs text-teal-300 font-medium uppercase">Success Rate</div>
-                                <div class="text-sm font-semibold text-teal-100">${(result.inputs.success_rate * 100).toFixed(1)}%</div>
-                            </div>
-                            ` : ''}
                         </div>
                         
                         <!-- Buy Recommendations -->
@@ -448,7 +447,6 @@ def scan():
         rarity = request.args.get('rarity', 'Mil-Spec')
         stattrak = request.args.get('stattrak', 'false').lower() == 'true'
         min_roi = float(request.args.get('min_roi', '0'))
-        min_success_rate = float(request.args.get('min_success_rate', '0'))
         min_cost = float(request.args.get('min_cost', '0'))
         max_cost = float(request.args.get('max_cost', '0'))
         collection = request.args.get('collection', '')
@@ -458,12 +456,17 @@ def scan():
             'assume_input_costs_include_fees', 'true').lower() == 'true'
 
         # Validate rarity
-        valid_rarities = ['Industrial', 'Mil-Spec', 'Restricted', 'Classified']
+        valid_rarities = ['Consumer', 'Industrial',
+                          'Mil-Spec', 'Restricted', 'Classified', 'Covert', '']
         if rarity not in valid_rarities:
             return jsonify({"error": f"Invalid rarity. Must be one of: {valid_rarities}"}), 400
 
         # Get analyzer
         analyzer = analyzer_cache.get_analyzer()
+
+        # Handle "All Rarities" case - for now, default to Mil-Spec if empty
+        if not rarity:
+            rarity = 'Mil-Spec'
 
         # Perform analysis
         results = analyzer.analyze(
@@ -477,10 +480,6 @@ def scan():
         # Apply additional filters
         filtered_results = []
         for candidate in results:
-            # Filter by success rate (handle None values)
-            if min_success_rate > 0 and (candidate.success_rate is None or candidate.success_rate < min_success_rate):
-                continue
-
             # Filter by cost range
             if min_cost > 0 and candidate.total_cost < min_cost:
                 continue
@@ -493,9 +492,7 @@ def scan():
                 if collection not in collections_in_candidate:
                     continue
 
-            filtered_results.append(candidate)
-
-        # Sort results
+            filtered_results.append(candidate)        # Sort results
         if sort_by == 'highest_profit':
             filtered_results.sort(key=lambda x: x.roi, reverse=True)
         elif sort_by == 'lowest_profit':
@@ -508,11 +505,6 @@ def scan():
             filtered_results.sort(key=lambda x: x.expected_value, reverse=True)
         elif sort_by == 'lowest_ev':
             filtered_results.sort(key=lambda x: x.expected_value)
-        elif sort_by == 'lowest_risk':
-            filtered_results.sort(
-                key=lambda x: x.success_rate or 0, reverse=True)
-        elif sort_by == 'highest_risk':
-            filtered_results.sort(key=lambda x: x.success_rate or 0)
         # Default is already sorted by profit (highest first)
 
         # Limit results after filtering and sorting
@@ -524,7 +516,6 @@ def scan():
                 "rarity": rarity,
                 "stattrak": stattrak,
                 "min_roi": min_roi,
-                "min_success_rate": min_success_rate,
                 "min_cost": min_cost,
                 "max_cost": max_cost,
                 "collection": collection,
