@@ -543,7 +543,7 @@ def scan():
             "results": []
         }
 
-        for candidate in results:
+        for candidate in filtered_results:
             result = {
                 "inputs": {
                     "rarity": candidate.rarity,

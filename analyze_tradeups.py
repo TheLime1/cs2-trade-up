@@ -4,7 +4,7 @@ CS2/CS:GO Trade-Up Analyzer
 A comprehensive tool for analyzing profitable CS2/CS:GO trade-up contracts.
 
 Usage:
-    python analyze_tradeups.py --rarity "Mil-Spec" --stattrak false --min_roi 0.05 --top 50
+    python analyze_tradeups.py --rarity "Mil-Spec" --stattrak false --min_roi 0.05 --max_cost 20.0 --top 50
     python analyze_tradeups.py --float_aware --input_floats 0.03,0.04,0.02,0.01,0.05,0.02,0.03,0.04,0.02,0.01
 """
 
@@ -775,7 +775,7 @@ class TradeUpAnalyzer:
             self.skins, allow_consumer_inputs)
 
     def analyze(self, rarity: str, stattrak: bool = False, min_roi: float = 0.0,
-                top: int = 25, assume_input_costs_include_fees: bool = True) -> List[TradeUpCandidate]:
+                top: int = 25, assume_input_costs_include_fees: bool = True, max_cost: float = 0.0) -> List[TradeUpCandidate]:
         """Perform trade-up analysis using database prices and availability."""
         if not self.collection_index:
             raise ValueError("Data not loaded. Call load_data() first.")
@@ -787,8 +787,10 @@ class TradeUpAnalyzer:
             self.collection_index, assume_input_costs_include_fees)
         candidates = calculator.generate_candidates(rarity, stattrak)
 
-        # Filter by minimum ROI
+        # Filter by minimum ROI and maximum cost
         profitable = [c for c in candidates if c.roi >= min_roi]
+        if max_cost > 0:
+            profitable = [c for c in profitable if c.total_cost <= max_cost]
 
         # Sort by expected value (descending)
         profitable.sort(key=lambda x: x.expected_value, reverse=True)
@@ -922,6 +924,13 @@ Examples:
     )
 
     parser.add_argument(
+        '--max_cost',
+        type=float,
+        default=0.0,
+        help='Maximum total input cost filter (default: 0.0 = no limit)'
+    )
+
+    parser.add_argument(
         '--top',
         type=int,
         default=25,
@@ -968,6 +977,7 @@ Examples:
             rarity=args.rarity,
             stattrak=args.stattrak,
             min_roi=args.min_roi,
+            max_cost=args.max_cost,
             top=args.top,
             assume_input_costs_include_fees=args.assume_input_costs_include_fees
         )
