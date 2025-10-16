@@ -35,9 +35,11 @@ Consumer Grade → Industrial Grade → Mil-Spec Grade → Restricted → Classi
 ```
 
 **Important Notes:**
-- Consumer Grade inputs are disabled by default but can be enabled via configuration
+- Consumer Grade inputs are **enabled by default** to align with popular calculators like csgo.exchange and TradeUpSpy
+- Set `allow_consumer_inputs=false` to exclude them if needed (some sources dispute Consumer eligibility due to community ambiguity about whether Consumer→Industrial trade-ups are valid)
 - Covert items can be outputs but never inputs
 - Souvenir items, Knives, and Contraband items are always excluded
+- StatTrak trade-ups require StatTrak variants to exist at the target rarity - collections without StatTrak outputs at the target tier are automatically excluded
 
 ---
 
@@ -126,8 +128,9 @@ An item is eligible as trade-up output if:
 
 - It belongs to a collection that has eligible inputs at the lower rarity
 - It has the correct rarity (one tier above inputs)
-- It matches the StatTrak™ status of inputs
+- It matches the StatTrak™ status of inputs **and** has a StatTrak variant available (if required)
 - It has valid pricing data
+- StatTrak outputs must actually exist in the target collection/rarity combination
 
 ---
 
@@ -146,9 +149,11 @@ collection_outputs: Dict[(collection, rarity, stattrak)] = List[SkinData]
 
 ### Collection Validation
 For each collection at a given rarity:
+
 - Count total possible outputs (`mC`)
 - Verify at least one output exists
 - Filter by availability and pricing data
+- When mixing collections, probability mass per collection is proportional to its input count
 
 ---
 
@@ -230,49 +235,68 @@ This provides slightly better than average quality while keeping costs reasonabl
 ## Steam Market Fee Calculations
 
 ### Fee Structure
-Steam Community Market applies a **15% total fee**:
-- **5%** Steam platform fee
-- **10%** CS2 game fee
+Steam Community Market applies a **15% total fee** with precise component-based logic:
+- **5%** Steam platform fee (minimum $0.01)
+- **10%** CS2 game fee (minimum $0.01)
+- **$0.03** minimum listing price enforced
 
-### Net Amount Calculation
-Given a listing price `P_list`, the seller receives:
+### Precise Fee Calculation
+The system uses Steam's exact fee logic instead of simplified percentage calculations:
+
 ```python
-def net_from_list_price(list_price):
-    return round(list_price * 0.85, 2)
+def exact_fee_split(buyer_pays):
+    # Enforce minimum listing price
+    if buyer_pays < 0.03:
+        buyer_pays = 0.03
+    
+    # Calculate individual fee components with minimums
+    steam_fee = max(round(buyer_pays * 0.05, 2), 0.01)
+    game_fee = max(round(buyer_pays * 0.10, 2), 0.01)
+    
+    # Seller receives the remainder
+    seller_gets = round(buyer_pays - steam_fee - game_fee, 2)
+    return seller_gets
 ```
 
-### Required Listing Price
-To achieve a target net amount `R`:
-```python
-def list_price_for_net(net_amount):
-    return round(net_amount / 0.85, 2)
-```
+### Fee Rounding Behavior
+Steam's rounding behavior affects low-priced items significantly:
+- Items under $0.03 cannot be listed
+- Each fee component has a $0.01 minimum
+- For a $0.05 item: steam_fee = $0.01, game_fee = $0.01, seller gets = $0.03
+- For a $1.00 item: steam_fee = $0.05, game_fee = $0.10, seller gets = $0.85
 
-### Fee Application in Analysis
-- **Input Costs:** Use buyer-pays prices (what we spend to acquire items)
-- **Output Revenue:** Use net seller amount after fees (what we receive when selling)
+### Market Variance and Slippage
+The calculator supports optional market variance simulation:
+- **Buy Slippage:** Increases input costs to simulate higher purchase prices
+- **Sell Slippage:** Decreases output revenue to simulate lower selling prices  
+- **Custom Fee Rates:** Override the default 15% for specialized market scenarios
 
 ---
 
 ## Input Selection Algorithm
 
-### Selection Strategy
-For each collection requiring `n` items:
+### Selection Strategy (Balanced Approach)
+The input selection algorithm balances cost-effectiveness with weapon consistency:
 
-1. **Group by Weapon Type:** Items of the same weapon (e.g., "AK-47") should use the same wear level for consistency
+1. **Availability Prioritization:** Items with higher availability are preferred, but items with missing availability data are not excluded (just deprioritized)
 
-2. **Price Sorting:** Sort available items by price (cheapest first)
+2. **Price Optimization:** Select cheapest eligible inputs by price within each collection
 
-3. **Weapon Consistency:** When multiple items needed from same weapon, select same exterior for all
+3. **Weapon Consistency:** Items of the same weapon type use the same wear level and float recommendations for realistic trading scenarios
 
-4. **Float Unification:** All items of the same weapon use the same recommended float value
+4. **Float Unification:** All items of the same weapon use unified float constraints to ensure obtainability
 
 ### Implementation Details
 
 ```python
 def select_inputs(collection, required_count, available_items):
-    # Sort by price (cheapest first)
-    available_items.sort(key=lambda x: x.steam_price)
+    # Sort by availability (higher first) then price (lower first)
+    def sort_key(skin):
+        availability = skin.availability if skin.availability is not None else 0
+        price = skin.steam_price or float('inf')
+        return (-availability, price)
+    
+    available_items.sort(key=sort_key)
     
     selected_weapons = {}  # Track weapon -> specific_variant mapping
     selected_items = []
@@ -292,7 +316,17 @@ def select_inputs(collection, required_count, available_items):
     return selected_items
 ```
 
-### Buy Recommendation Grouping
+### Float Consistency Rules
+- All items of the same weapon use the same recommended float value
+- Float recommendations use the least restrictive (highest) float among variants
+- This ensures all recommended items are actually obtainable on the market
+
+### Liquidity Guard
+The system now includes an optional liquidity guard to filter out outputs with very low market availability:
+
+- `min_liquidity` parameter sets minimum availability threshold
+- Outputs below this threshold are excluded from consideration
+- Helps avoid scenarios where profitable outcomes have no realistic liquidity
 Identical items are grouped for user convenience:
 
 ```python
@@ -338,22 +372,26 @@ ROI(T) = EV(T) / TotalInputCost
 ```
 
 ### Success Rate Calculation
-Percentage of outcomes that are individually profitable:
+**Corrected Definition:** A trade-up is considered "successful" if the single output value covers the total input basket cost.
 
 ```python
 def calculate_success_rate(outcomes, total_input_cost):
     profitable_outcomes = [
         o for o in outcomes 
-        if o.net_price > total_input_cost / 10  # Single outcome value > avg input cost
+        if o.net_price >= total_input_cost  # Single outcome covers entire input cost
     ]
     return sum(o.probability for o in profitable_outcomes)
 ```
 
-### Contribution Calculation
-Each outcome's contribution to expected value:
+**Important:** Previous versions incorrectly compared outcomes against average per-item cost (`total_cost / 10`), which overstated success rates. The corrected version provides realistic probability of recovering the full investment.
+
+### Revenue Contribution Calculation
+Each outcome's contribution to expected value, renamed for clarity:
 ```
-contribution = probability × net_selling_price
+expected_revenue_contribution = probability × net_selling_price
 ```
+
+**Terminology Update:** Previously called "contribution", now renamed to "expected_revenue_contribution" to clarify that this represents the revenue component before subtracting input costs.
 
 ---
 

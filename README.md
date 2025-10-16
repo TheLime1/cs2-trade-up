@@ -8,11 +8,16 @@ A comprehensive Python tool for analyzing profitable CS2/CS:GO trade-up contract
 - **Buy Recommendations**: Tells you exactly which items to buy with specific floats
 - **Availability Checking**: Only considers items actually available on the market
 - **Accurate Trade-Up Logic**: Implements canonical CS2/CS:GO trade-up rules and formulas
+- **Enhanced Fee Calculations**: Precise Steam fee logic with $0.03 minimum and component-based rounding
+- **Market Variance Simulation**: Buy/sell slippage parameters and custom fee rates
+- **Liquidity Guard**: Filters out low-availability outputs for realistic scenarios
+- **Consumer Grade Support**: Enabled by default with community ambiguity documentation
+- **Corrected Success Rate**: Proper definition based on total investment recovery
 - **Float Optimization**: Automatically calculates optimal float recommendations for inputs
 - **Steam Market Integration**: Real-time price data from community market
 - **Multiple Interfaces**: Both CLI tool and web application
 - **Comprehensive Analysis**: Expected value, ROI, and probability calculations
-- **Fee Handling**: Proper Steam Community Market fee calculations (15% total)
+- **StatTrak Validation**: Ensures StatTrak outputs actually exist before recommending trades
 
 ## What This Tool Does
 
@@ -38,6 +43,30 @@ Data includes:
 - Collection and rarity information
 
 Data is automatically cached locally for 24 hours to minimize API calls and improve performance.
+
+## Recent Improvements
+
+This implementation includes several critical fixes and enhancements based on expert review:
+
+### ✅ Core Logic Fixes
+- **Success Rate Definition**: Fixed to compare outcomes against total investment (not per-item cost)
+- **Consumer Grade Default**: Now enabled by default to match popular calculators
+- **Input Selection**: Removed unnecessary weapon/exterior constraints for cost-optimal selection
+- **StatTrak Validation**: Ensures StatTrak outputs actually exist before recommending trades
+
+### ✅ Enhanced Fee Calculations
+- **Precise Steam Logic**: Component-based fee calculation with minimum amounts
+- **$0.03 Minimum**: Enforces Steam's minimum listing price
+- **Rounding Accuracy**: Matches Steam's exact fee behavior for all price ranges
+
+### ✅ Market Simulation Features
+- **Slippage Parameters**: `--buy_slippage_pct` and `--sell_slippage_pct` for market variance
+- **Custom Fee Rates**: `--custom_fee_rate` to override default 15% (e.g., for specialized scenarios)
+- **Liquidity Guard**: `--min_liquidity` to filter low-availability outputs
+
+### ✅ Improved Data Handling
+- **Availability Optional**: Items with missing availability are deprioritized, not excluded
+- **Better Terminology**: Renamed "contribution" to "expected_revenue_contribution" for clarity
 
 ## Installation
 

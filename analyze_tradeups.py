@@ -52,7 +52,7 @@ class TradeUpOutcome:
     probability: float
     price: float
     net_price: float
-    contribution: float
+    expected_revenue_contribution: float  # probability × net_price
 
 
 @dataclass
@@ -81,21 +81,81 @@ class TradeUpCandidate:
 
 
 class SteamFeeCalculator:
-    """Handles Steam Community Market fee calculations."""
+    """Handles Steam Community Market fee calculations with precise Steam logic."""
 
     STEAM_FEE_RATE = 0.05  # 5%
     GAME_FEE_RATE = 0.10   # 10%
-    TOTAL_FEE_RATE = STEAM_FEE_RATE + GAME_FEE_RATE  # 15%
+    MINIMUM_LISTING_PRICE = 0.03  # $0.03 minimum listing price
+    MINIMUM_FEE_COMPONENT = 0.01  # $0.01 minimum per fee component
+
+    @classmethod
+    def exact_fee_split(cls, buyer_pays: float) -> float:
+        """
+        Calculate exact seller amount using Steam's precise fee logic.
+
+        Args:
+            buyer_pays: The price the buyer pays (listing price)
+
+        Returns:
+            The amount the seller receives after fees
+        """
+        # Enforce minimum listing price
+        if buyer_pays < cls.MINIMUM_LISTING_PRICE:
+            buyer_pays = cls.MINIMUM_LISTING_PRICE
+
+        # Calculate individual fee components with minimums
+        steam_fee = max(round(buyer_pays * cls.STEAM_FEE_RATE,
+                        2), cls.MINIMUM_FEE_COMPONENT)
+        game_fee = max(round(buyer_pays * cls.GAME_FEE_RATE, 2),
+                       cls.MINIMUM_FEE_COMPONENT)
+
+        # Total fees
+        total_fee = steam_fee + game_fee
+
+        # Seller receives the remainder
+        seller_gets = round(buyer_pays - total_fee, 2)
+
+        return seller_gets
 
     @classmethod
     def net_from_list_price(cls, list_price: float) -> float:
-        """Calculate net amount seller receives after fees."""
-        return round(list_price * (1 - cls.TOTAL_FEE_RATE), 2)
+        """Calculate net amount seller receives after fees using exact Steam logic."""
+        return cls.exact_fee_split(list_price)
 
     @classmethod
     def list_price_for_net(cls, net_amount: float) -> float:
         """Calculate list price needed to achieve target net amount."""
-        return round(net_amount / (1 - cls.TOTAL_FEE_RATE), 2)
+        # Start with simple calculation and iterate to find exact price
+        # This accounts for the minimum fee components and rounding
+        estimated_price = round(
+            net_amount / (1 - cls.STEAM_FEE_RATE - cls.GAME_FEE_RATE), 2)
+
+        # Ensure minimum listing price
+        estimated_price = max(estimated_price, cls.MINIMUM_LISTING_PRICE)
+
+        # Fine-tune to get exact net amount
+        for adjustment in [0.00, 0.01, -0.01, 0.02, -0.02, 0.03, -0.03]:
+            test_price = estimated_price + adjustment
+            if test_price >= cls.MINIMUM_LISTING_PRICE:
+                actual_net = cls.exact_fee_split(test_price)
+                if actual_net >= net_amount:
+                    return test_price
+
+        return estimated_price
+
+    @classmethod
+    def get_total_fee_rate(cls, buyer_pays: float) -> float:
+        """Get the effective total fee rate for a given price."""
+        if buyer_pays < cls.MINIMUM_LISTING_PRICE:
+            buyer_pays = cls.MINIMUM_LISTING_PRICE
+
+        steam_fee = max(round(buyer_pays * cls.STEAM_FEE_RATE,
+                        2), cls.MINIMUM_FEE_COMPONENT)
+        game_fee = max(round(buyer_pays * cls.GAME_FEE_RATE, 2),
+                       cls.MINIMUM_FEE_COMPONENT)
+        total_fee = steam_fee + game_fee
+
+        return total_fee / buyer_pays if buyer_pays > 0 else 0
 
 
 class FloatCalculator:
@@ -362,7 +422,7 @@ class CollectionIndex:
         'Covert': 'Covert'
     }
 
-    def __init__(self, skins: List[SkinData], allow_consumer_inputs: bool = False):
+    def __init__(self, skins: List[SkinData], allow_consumer_inputs: bool = True):
         self.skins = skins
         self.allow_consumer_inputs = allow_consumer_inputs
         self.console = Console()
@@ -410,7 +470,7 @@ class CollectionIndex:
         if not skin.collection or not skin.rarity or skin.steam_price is None:
             return True
 
-        # Skip items with no availability (not available on market)
+        # Skip items with explicitly zero availability (but allow None/missing availability)
         if skin.availability is not None and skin.availability <= 0:
             return True
 
@@ -469,16 +529,50 @@ class CollectionIndex:
         """Get all possible outputs for a collection at a given rarity."""
         normalized = self.RARITY_ALIASES.get(rarity, rarity)
         key = (collection, normalized, stattrak)
-        return self.collection_outputs.get(key, [])
+        outputs = self.collection_outputs.get(key, [])
+
+        # For StatTrak trade-ups, ensure at least one StatTrak variant exists
+        # If no StatTrak outputs exist for this collection+rarity, return empty list
+        if stattrak and not outputs:
+            return []
+
+        return outputs
 
 
 class TradeUpCalculator:
     """Calculates trade-up probabilities and expected values."""
 
-    def __init__(self, collection_index: CollectionIndex, assume_input_costs_include_fees: bool = True):
+    def __init__(self, collection_index: CollectionIndex, assume_input_costs_include_fees: bool = True,
+                 buy_slippage_pct: float = 0.0, sell_slippage_pct: float = 0.0,
+                 custom_fee_rate: Optional[float] = None, min_liquidity: int = 1):
         self.collection_index = collection_index
         self.assume_input_costs_include_fees = assume_input_costs_include_fees
+        # Additional cost for buying (market variance)
+        self.buy_slippage_pct = buy_slippage_pct
+        # Reduced revenue for selling (market variance)
+        self.sell_slippage_pct = sell_slippage_pct
+        self.custom_fee_rate = custom_fee_rate  # Override default 15% fee rate
+        self.min_liquidity = min_liquidity  # Minimum availability for outputs
         self.console = Console()
+
+    def apply_market_adjustments(self, price: float, is_buying: bool) -> float:
+        """Apply slippage and custom fee rates to prices."""
+        if is_buying:
+            # Apply buy slippage (increases cost)
+            adjusted_price = price * (1 + self.buy_slippage_pct / 100)
+        else:
+            # For selling, first apply custom fee rate if specified
+            if self.custom_fee_rate is not None:
+                # Use custom fee rate instead of Steam's default
+                net_price = price * (1 - self.custom_fee_rate / 100)
+            else:
+                # Use Steam's precise fee calculation
+                net_price = SteamFeeCalculator.exact_fee_split(price)
+
+            # Then apply sell slippage (reduces revenue)
+            adjusted_price = net_price * (1 - self.sell_slippage_pct / 100)
+
+        return adjusted_price
 
     def generate_candidates(self, rarity: str, stattrak: bool) -> List[TradeUpCandidate]:
         """Generate all viable trade-up candidates using database prices and availability."""
@@ -493,19 +587,24 @@ class TradeUpCalculator:
             self.console.print(f"[red]No next rarity found for {rarity}[/red]")
             return []
 
-        # Group inputs by collection and filter by availability
+        # Group inputs by collection and sort by availability + price
         inputs_by_collection = {}
         for skin in inputs:
-            # Only include items that are actually available
-            if skin.availability is None or skin.availability > 0:
-                if skin.collection not in inputs_by_collection:
-                    inputs_by_collection[skin.collection] = []
-                inputs_by_collection[skin.collection].append(skin)
+            if skin.collection not in inputs_by_collection:
+                inputs_by_collection[skin.collection] = []
+            inputs_by_collection[skin.collection].append(skin)
 
-        # Sort each collection by price (cheapest first)
+        # Sort each collection by availability (available first) then by price (cheapest first)
+        # This deprioritizes items with missing/low availability but doesn't exclude them
         for collection in inputs_by_collection:
-            inputs_by_collection[collection].sort(
-                key=lambda x: x.steam_price or float('inf'))
+            def sort_key(skin):
+                # Primary sort: availability (higher is better, None treated as 0)
+                availability = skin.availability if skin.availability is not None else 0
+                # Secondary sort: price (lower is better)
+                price = skin.steam_price or float('inf')
+                return (-availability, price)
+
+            inputs_by_collection[collection].sort(key=sort_key)
 
         candidates = []
         collections = list(inputs_by_collection.keys())
@@ -552,7 +651,7 @@ class TradeUpCalculator:
             if len(available) < count:
                 return None
 
-            # Simple rule: same weapon = same wear level
+            # Enforce same weapon = same wear level for consistency
             collection_items = []
             selected_weapons = {}  # Track which specific variant we chose for each weapon
 
@@ -573,6 +672,9 @@ class TradeUpCalculator:
                 cost = skin.steam_price or 0.0
                 if not self.assume_input_costs_include_fees:
                     cost = SteamFeeCalculator.list_price_for_net(cost)
+
+                # Apply buy slippage
+                cost = self.apply_market_adjustments(cost, is_buying=True)
 
                 total_cost += cost
                 selected_inputs.append(skin)
@@ -630,9 +732,6 @@ class TradeUpCalculator:
             if weapon_name in weapon_float_map:
                 rec.recommended_float = weapon_float_map[weapon_name]
 
-        # Since we ensure same weapon = same wear, no grouping needed
-        # Just keep the original buy_recommendations as they are
-
         if len(selected_inputs) != 10:
             return None
 
@@ -666,6 +765,11 @@ class TradeUpCalculator:
                 if output.steam_price is None:
                     continue
 
+                # Apply liquidity guard - skip outputs with very low availability
+                if (output.availability is not None and
+                        output.availability < self.min_liquidity):
+                    continue
+
                 # Handle float-aware calculations for better price estimation
                 net_price = output.steam_price
                 if avg_input_float is not None and output.min_float is not None and output.max_float is not None:
@@ -683,11 +787,12 @@ class TradeUpCalculator:
                             net_price = potential_output.steam_price
                             break
 
-                # Calculate net selling price (after fees)
-                net_price = SteamFeeCalculator.net_from_list_price(net_price)
+                # Apply sell slippage and fee calculations
+                net_price = self.apply_market_adjustments(
+                    net_price, is_buying=False)
 
                 probability = collection_prob / num_outputs
-                contribution = probability * net_price
+                expected_revenue_contribution = probability * net_price
 
                 outcomes.append(TradeUpOutcome(
                     market_name=output.market_name,
@@ -695,7 +800,7 @@ class TradeUpCalculator:
                     probability=probability,
                     price=output.steam_price,
                     net_price=net_price,
-                    contribution=contribution
+                    expected_revenue_contribution=expected_revenue_contribution
                 ))
 
         if not outcomes:
@@ -703,12 +808,13 @@ class TradeUpCalculator:
 
         # Calculate expected value and ROI
         expected_value = sum(
-            outcome.contribution for outcome in outcomes) - total_cost
+            outcome.expected_revenue_contribution for outcome in outcomes) - total_cost
         roi = expected_value / total_cost if total_cost > 0 else 0.0
 
-        # Calculate success rate (percentage of outcomes that are profitable vs input cost)
+        # Calculate success rate (percentage of outcomes where output covers total input cost)
+        # A trade-up is "successful" if the single output covers the total input basket cost
         profitable_outcomes = [
-            o for o in outcomes if o.net_price > total_cost / 10]
+            o for o in outcomes if o.net_price >= total_cost]
         success_rate = sum(
             o.probability for o in profitable_outcomes) if profitable_outcomes else 0.0
 
@@ -736,7 +842,7 @@ class TradeUpAnalyzer:
         self.skins = []
         self.collection_index = None
 
-    def load_data(self, force_refresh: bool = False, allow_consumer_inputs: bool = False) -> None:
+    def load_data(self, force_refresh: bool = False, allow_consumer_inputs: bool = True) -> None:
         """Load and normalize skin data."""
         self.console.print(
             "[bold blue]Loading CS2 skin database...[/bold blue]")
@@ -775,7 +881,9 @@ class TradeUpAnalyzer:
             self.skins, allow_consumer_inputs)
 
     def analyze(self, rarity: str, stattrak: bool = False, min_roi: float = 0.0,
-                top: int = 25, assume_input_costs_include_fees: bool = True, max_cost: float = 0.0) -> List[TradeUpCandidate]:
+                top: int = 25, assume_input_costs_include_fees: bool = True, max_cost: float = 0.0,
+                buy_slippage_pct: float = 0.0, sell_slippage_pct: float = 0.0,
+                custom_fee_rate: Optional[float] = None, min_liquidity: int = 1) -> List[TradeUpCandidate]:
         """Perform trade-up analysis using database prices and availability."""
         if not self.collection_index:
             raise ValueError("Data not loaded. Call load_data() first.")
@@ -784,7 +892,8 @@ class TradeUpAnalyzer:
             f"[bold blue]Analyzing {rarity} trade-ups (StatTrak: {stattrak})[/bold blue]")
 
         calculator = TradeUpCalculator(
-            self.collection_index, assume_input_costs_include_fees)
+            self.collection_index, assume_input_costs_include_fees,
+            buy_slippage_pct, sell_slippage_pct, custom_fee_rate, min_liquidity)
         candidates = calculator.generate_candidates(rarity, stattrak)
 
         # Filter by minimum ROI and maximum cost
@@ -842,7 +951,7 @@ class TradeUpAnalyzer:
                 for rec in candidate.buy_recommendations:
                     float_info = ""
                     if rec.recommended_float is not None:
-                        float_info = f", float≤{rec.recommended_float:.3f}"
+                        float_info = f", float≤{rec.recommended_float:.2f}"
 
                     quantity_text = f"{rec.quantity} x " if rec.quantity > 1 else ""
 
@@ -878,7 +987,7 @@ class TradeUpAnalyzer:
                     outcome.collection,
                     f"${outcome.price:.2f}",
                     f"${outcome.net_price:.2f}",
-                    f"${outcome.contribution:.2f}"
+                    f"${outcome.expected_revenue_contribution:.2f}"
                 )
 
             self.console.print(table)
@@ -947,8 +1056,36 @@ Examples:
     parser.add_argument(
         '--allow_consumer_inputs',
         type=lambda x: x.lower() == 'true',
-        default=False,
-        help='Allow Consumer Grade items as inputs (true/false)'
+        default=True,
+        help='Allow Consumer Grade items as inputs (true/false) - default: true'
+    )
+
+    parser.add_argument(
+        '--buy_slippage_pct',
+        type=float,
+        default=0.0,
+        help='Buy slippage percentage to simulate market variance (default: 0.0)'
+    )
+
+    parser.add_argument(
+        '--sell_slippage_pct',
+        type=float,
+        default=0.0,
+        help='Sell slippage percentage to simulate market variance (default: 0.0)'
+    )
+
+    parser.add_argument(
+        '--custom_fee_rate',
+        type=float,
+        default=None,
+        help='Custom fee rate percentage (overrides Steam\'s 15%, e.g. 10.0 for 10%)'
+    )
+
+    parser.add_argument(
+        '--min_liquidity',
+        type=int,
+        default=1,
+        help='Minimum availability/listings required for outputs (default: 1)'
     )
 
     parser.add_argument(
@@ -979,7 +1116,11 @@ Examples:
             min_roi=args.min_roi,
             max_cost=args.max_cost,
             top=args.top,
-            assume_input_costs_include_fees=args.assume_input_costs_include_fees
+            assume_input_costs_include_fees=args.assume_input_costs_include_fees,
+            buy_slippage_pct=args.buy_slippage_pct,
+            sell_slippage_pct=args.sell_slippage_pct,
+            custom_fee_rate=args.custom_fee_rate,
+            min_liquidity=args.min_liquidity
         )
 
         # Print results

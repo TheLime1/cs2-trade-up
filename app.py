@@ -26,7 +26,7 @@ class AnalyzerCache:
         self.cache_refresh_minutes = cache_refresh_minutes
         self.lock = threading.Lock()
 
-    def get_analyzer(self, allow_consumer_inputs: bool = False) -> TradeUpAnalyzer:
+    def get_analyzer(self, allow_consumer_inputs: bool = True) -> TradeUpAnalyzer:
         """Get cached analyzer instance, refreshing if needed."""
         with self.lock:
             now = time.time()
@@ -337,7 +337,7 @@ HTML_TEMPLATE = """
                             <h4 class="font-medium text-gray-200 mb-3">Input Items</h4>
                             <div class="space-y-2">
                                 ${result.buy_recommendations.map(rec => {
-                                    const floatInfo = rec.recommended_float ? `, float≤${rec.recommended_float.toFixed(3)}` : '';
+                                    const floatInfo = rec.recommended_float ? `, float≤${rec.recommended_float.toFixed(2)}` : '';
                                     const quantityText = rec.quantity > 1 ? `${rec.quantity} x ` : '';
                                     
                                     // Extract wear level from market name if present
@@ -570,7 +570,7 @@ def scan():
                         "p": outcome.probability,
                         "price": outcome.price,
                         "net": outcome.net_price,
-                        "contrib": outcome.contribution
+                        "contrib": outcome.expected_revenue_contribution
                     }
                     for outcome in candidate.outcomes
                 ],
