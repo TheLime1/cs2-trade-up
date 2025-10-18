@@ -362,23 +362,39 @@ class DataNormalizer:
                 continue
 
             exterior = variant.get('wear', '')
-            float_range = variant.get('float_range', [])
-            min_float = float_range[0] if len(float_range) >= 1 else None
-            max_float = float_range[1] if len(float_range) >= 2 else None
 
-            # Check if variant is available
-            available = variant.get('available', False)
-            if not available:
+            # Use new wear_range structure
+            wear_range = variant.get('wear_range', {})
+            if isinstance(wear_range, dict):
+                min_float = wear_range.get('min')
+                max_float = wear_range.get('max')
+            else:
+                # Fallback to old float_range format
+                float_range = variant.get('float_range', [])
+                min_float = float_range[0] if len(float_range) >= 1 else None
+                max_float = float_range[1] if len(float_range) >= 2 else None
+
+            # Check if variant is achievable (can exist for this skin)
+            # Default to True for backward compatibility
+            achievable = variant.get('achievable', True)
+            if not achievable:
                 continue
+
+            # Check listing availability
+            listing = variant.get('listing', {})
+            has_normal_listings = listing.get('normal', False) if isinstance(
+                listing, dict) else variant.get('has_normal_listings', False)
+            has_stattrak_listings = listing.get(
+                'stattrak', False) if isinstance(listing, dict) else False
 
             prices = variant.get('prices', {})
 
             # Process normal variant
             normal_price_data = prices.get('normal', {})
             normal_price = normal_price_data.get('usd')
-            has_normal_listings = variant.get('has_normal_listings', False)
 
-            if normal_price and has_normal_listings:
+            # Include variant if it has a price (even if listing is False - database may have pricing data)
+            if normal_price and normal_price > 0:
                 market_name = f"{base_weapon} | {base_skin} ({exterior})"
 
                 results.append(SkinData(
@@ -393,21 +409,19 @@ class DataNormalizer:
                     min_float=min_float,
                     max_float=max_float,
                     steam_price=normal_price,
-                    availability=1 if has_normal_listings else 0,  # Boolean to int
+                    availability=1 if has_normal_listings else 0,
                     last_update=None
                 ))
 
             # Process StatTrak variant
             stattrak_price_data = prices.get('stattrak', {})
             stattrak_price = stattrak_price_data.get('usd')
-            has_stattrak_listings = variant.get('has_stattrak_listings', False)
-            stattrak_available = variant.get('stattrak_available', False)
 
-            if stattrak_price and has_stattrak_listings and stattrak_available:
-                stattrak_market_name = f"StatTrak™ {base_weapon} | {base_skin} ({exterior})"
+            if stattrak_price and stattrak_price > 0:
+                market_name = f"StatTrak™ {base_weapon} | {base_skin} ({exterior})"
 
                 results.append(SkinData(
-                    market_name=stattrak_market_name,
+                    market_name=market_name,
                     weapon=base_weapon,
                     skin=base_skin,
                     exterior=exterior,
@@ -418,7 +432,7 @@ class DataNormalizer:
                     min_float=min_float,
                     max_float=max_float,
                     steam_price=stattrak_price,
-                    availability=1 if has_stattrak_listings else 0,  # Boolean to int
+                    availability=1 if has_stattrak_listings else 0,
                     last_update=None
                 ))
 
@@ -1580,7 +1594,7 @@ class TradeUpAnalyzer:
         self.collection_index = CollectionIndex(
             self.skins, allow_consumer_inputs)
 
-    def analyze(self, rarity: str, stattrak: bool = False, min_roi: float = 0.0,
+    def analyze(self, rarity: Optional[str] = None, stattrak: bool = False, min_roi: float = 0.0,
                 top: int = 25, assume_input_costs_include_fees: bool = True, max_cost: float = 0.0,
                 buy_slippage_pct: float = 0.0, sell_slippage_pct: float = 0.0,
                 custom_fee_rate: Optional[float] = None, min_liquidity: int = 1,
@@ -1892,59 +1906,23 @@ Examples:
             analyzer.precompute_cache()
             return
 
-        # Handle "all" rarity case
-        if args.rarity == "all":
-            all_rarities = ['Industrial', 'Mil-Spec',
-                            'Restricted', 'Classified']
-            all_results = []
-
-            for rarity in all_rarities:
-                analyzer.console.print(
-                    f"\n[bold cyan]Analyzing {rarity} rarity...[/bold cyan]")
-                results = analyzer.analyze(
-                    rarity=rarity,
-                    stattrak=args.stattrak,
-                    min_roi=args.min_roi,
-                    max_cost=args.max_cost,
-                    top=args.top,  # Use full top for each rarity, will sort later
-                    assume_input_costs_include_fees=args.assume_input_costs_include_fees,
-                    buy_slippage_pct=args.buy_slippage_pct,
-                    sell_slippage_pct=args.sell_slippage_pct,
-                    custom_fee_rate=args.custom_fee_rate,
-                    min_liquidity=args.min_liquidity,
-                    use_cache=not args.no_cache,
-                    max_combinations=args.max_combinations,
-                    debug=args.debug
-                )
-                all_results.extend(results)
-
-            # Sort all results by expected value and take top N
-            all_results.sort(key=lambda x: x.expected_value, reverse=True)
-            final_results = all_results[:args.top]
-
-            analyzer.console.print(
-                f"\n[bold green]Combined results from all rarities (top {args.top}):[/bold green]")
-            analyzer.print_results(final_results)
-        else:
-            # Perform analysis for single rarity
-            results = analyzer.analyze(
-                rarity=args.rarity,
-                stattrak=args.stattrak,
-                min_roi=args.min_roi,
-                max_cost=args.max_cost,
-                top=args.top,
-                assume_input_costs_include_fees=args.assume_input_costs_include_fees,
-                buy_slippage_pct=args.buy_slippage_pct,
-                sell_slippage_pct=args.sell_slippage_pct,
-                custom_fee_rate=args.custom_fee_rate,
-                min_liquidity=args.min_liquidity,
-                use_cache=not args.no_cache,
-                max_combinations=args.max_combinations,
-                debug=args.debug
-            )
-
-            # Print results
-            analyzer.print_results(results)
+        # Always analyze without rarity filter
+        results = analyzer.analyze(
+            rarity=None,
+            stattrak=args.stattrak,
+            min_roi=args.min_roi,
+            max_cost=args.max_cost,
+            top=args.top,
+            assume_input_costs_include_fees=args.assume_input_costs_include_fees,
+            buy_slippage_pct=args.buy_slippage_pct,
+            sell_slippage_pct=args.sell_slippage_pct,
+            custom_fee_rate=args.custom_fee_rate,
+            min_liquidity=args.min_liquidity,
+            use_cache=not args.no_cache,
+            max_combinations=args.max_combinations,
+            debug=args.debug
+        )
+        analyzer.print_results(results)
 
     except Exception as e:
         console = Console()

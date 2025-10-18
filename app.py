@@ -109,6 +109,20 @@ HTML_TEMPLATE = """
                                 <option value="true">StatTrak™</option>
                             </select>
                         </div>
+                        
+                        <!-- Rarity Filter (re-added) -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Rarity</label>
+                            <select id="rarity" name="rarity" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
+                                <option value="all" selected>All</option>
+                                <option value="Consumer">Consumer</option>
+                                <option value="Industrial">Industrial</option>
+                                <option value="Mil-Spec">Mil-Spec</option>
+                                <option value="Restricted">Restricted</option>
+                                <option value="Classified">Classified</option>
+                                <option value="Covert">Covert</option>
+                            </select>
+                        </div>
                     </div>
                     
                     <!-- Sort By row -->
@@ -126,19 +140,8 @@ HTML_TEMPLATE = """
                             </select>
                         </div>
                         
-                        <!-- Rarity -->
-                        <div>
-                            <label class="block text-sm font-medium text-gray-300 mb-2">Rarity</label>
-                            <select id="rarity" name="rarity" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
-                                <option value="" selected>All Rarities</option>
-                                <option value="Consumer">Consumer Grade</option>
-                                <option value="Industrial">Industrial Grade</option>
-                                <option value="Mil-Spec">Mil-Spec Grade</option>
-                                <option value="Restricted">Restricted</option>
-                                <option value="Classified">Classified</option>
-                                <option value="Covert">Covert</option>
-                            </select>
-                        </div>
+
+                        <!-- Rarity filter removed -->
                         
                         <!-- Top Results -->
                         <div>
@@ -312,6 +315,11 @@ HTML_TEMPLATE = """
                                 <div class="text-sm font-semibold text-yellow-100">$${result.inputs.total_cost.toFixed(2)}</div>
                             </div>
                             
+                               <!-- 7. Success Rate -->
+                               <div class="bg-purple-900 border-l-4 border-purple-400 rounded-lg p-3">
+                                   <div class="text-xs text-purple-300 font-medium uppercase">Success Rate:</div>
+                                   <div class="text-sm font-semibold text-purple-100">${result.inputs.success_rate !== undefined ? (result.inputs.success_rate * 100).toFixed(2) + '%' : 'N/A'}</div>
+                               </div>
                             <!-- 4. Expected Value -->
                             <div class="bg-orange-900 border-l-4 border-orange-400 rounded-lg p-3">
                                 <div class="text-xs text-orange-300 font-medium uppercase">Expected Value:</div>
@@ -460,7 +468,8 @@ def scan():
     """Analyze trade-ups with query parameters."""
     try:
         # Parse parameters
-        rarity = request.args.get('rarity', 'Mil-Spec')
+        # Default to 'all' so the UI/backend will analyze all rarities unless specified
+        rarity = request.args.get('rarity', 'all')
         stattrak = request.args.get('stattrak', 'false').lower() == 'true'
         min_roi = float(request.args.get('min_roi', '0'))
         min_cost = float(request.args.get('min_cost', '0'))
@@ -473,26 +482,45 @@ def scan():
 
         # Validate rarity
         valid_rarities = ['Consumer', 'Industrial',
-                          'Mil-Spec', 'Restricted', 'Classified', 'Covert', '']
+                          'Mil-Spec', 'Restricted', 'Classified', 'Covert', 'all']
         if rarity not in valid_rarities:
             return jsonify({"error": f"Invalid rarity. Must be one of: {valid_rarities}"}), 400
 
         # Get analyzer
         analyzer = analyzer_cache.get_analyzer()
 
-        # Handle "All Rarities" case - for now, default to Mil-Spec if empty
-        if not rarity:
-            rarity = 'Mil-Spec'
+        # If rarity == 'all', aggregate results across supported rarities
+        if rarity == 'all':
+            rarities_to_run = ['Industrial',
+                               'Mil-Spec', 'Restricted', 'Classified']
+            aggregated = []
+            for r in rarities_to_run:
+                res = analyzer.analyze(
+                    rarity=r,
+                    stattrak=stattrak,
+                    min_roi=min_roi,
+                    top=top,
+                    assume_input_costs_include_fees=assume_input_costs_include_fees,
+                    use_cache=True
+                )
+                # attach rarity to each candidate for UI
+                for c in res:
+                    c.rarity = r
+                aggregated.extend(res)
 
-        # Perform analysis (with caching enabled)
-        results = analyzer.analyze(
-            rarity=rarity,
-            stattrak=stattrak,
-            min_roi=min_roi,
-            top=top,
-            assume_input_costs_include_fees=assume_input_costs_include_fees,
-            use_cache=True  # Always use cache in Flask app for speed
-        )
+            # Sort and limit aggregated results
+            aggregated.sort(key=lambda x: x.roi, reverse=True)
+            results = aggregated[:top]
+        else:
+            # Perform analysis for single rarity (with caching enabled)
+            results = analyzer.analyze(
+                rarity=rarity,
+                stattrak=stattrak,
+                min_roi=min_roi,
+                top=top,
+                assume_input_costs_include_fees=assume_input_costs_include_fees,
+                use_cache=True  # Always use cache in Flask app for speed
+            )
 
         # Apply additional filters
         filtered_results = []
@@ -509,7 +537,9 @@ def scan():
                 if collection not in collections_in_candidate:
                     continue
 
-            filtered_results.append(candidate)        # Sort results
+            filtered_results.append(candidate)
+
+        # Sort results
         if sort_by == 'highest_profit':
             filtered_results.sort(key=lambda x: x.roi, reverse=True)
         elif sort_by == 'lowest_profit':
@@ -547,7 +577,7 @@ def scan():
         for candidate in filtered_results:
             result = {
                 "inputs": {
-                    "rarity": candidate.rarity,
+                    "rarity": getattr(candidate, 'rarity', None) or candidate.rarity,
                     "stattrak": candidate.stattrak,
                     "composition": candidate.inputs,
                     "total_cost": candidate.total_cost,
@@ -581,7 +611,6 @@ def scan():
             response_data["results"].append(result)
 
         return jsonify(response_data)
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

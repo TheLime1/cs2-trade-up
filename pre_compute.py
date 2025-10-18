@@ -463,6 +463,30 @@ class PreComputeManager:
         total_profitable = sum(r['profitable_count']
                                for r in successful_configs)
 
+        # Calculate average success rate and ROI across all successful configs
+        avg_success_rate = 0.0
+        avg_roi = 0.0
+        total_candidates = 0
+        for r in successful_configs:
+            # Each result is for a config, and has a list of candidates
+            # We need to get the average success rate and ROI for all candidates in all configs
+            if r['results_count'] > 0:
+                # If available, get the average from the candidates
+                if 'candidates' in r:
+                    avg_success_rate += sum(
+                        c.success_rate for c in r['candidates'] if c.success_rate is not None)
+                    avg_roi += sum(c.roi for c in r['candidates'])
+                    total_candidates += len(r['candidates'])
+                else:
+                    # Fallback: use config-level success_rate and roi if present
+                    avg_success_rate += r.get('success_rate',
+                                              0) * r['results_count']
+                    avg_roi += r.get('roi', 0) * r['results_count']
+                    total_candidates += r['results_count']
+
+        avg_success_rate = (avg_success_rate / max(total_candidates, 1)) * 100
+        avg_roi = (avg_roi / max(total_candidates, 1)) * 100
+
         # Create summary panel
         summary_table = Table(title="Pre-Computation Summary", box=box.ROUNDED)
         summary_table.add_column("Metric", style="bold cyan")
@@ -474,8 +498,8 @@ class PreComputeManager:
         summary_table.add_row("❌ Failed Configs", str(len(failed_configs)))
         summary_table.add_row("🔍 Total Results", f"{total_results:,}")
         summary_table.add_row("💰 Profitable Results", f"{total_profitable:,}")
-        summary_table.add_row(
-            "📈 Profitability Rate", f"{(total_profitable/max(total_results,1)*100):.1f}%")
+        summary_table.add_row("🎲 Avg Success Rate", f"{avg_success_rate:.2f}%")
+        summary_table.add_row("📈 Avg Profitability (ROI)", f"{avg_roi:.2f}%")
         summary_table.add_row("💾 Peak Memory Usage",
                               f"{self.stats['memory_usage_mb']:.1f} MB")
         summary_table.add_row("⚡ Avg Time per Config",
@@ -494,17 +518,27 @@ class PreComputeManager:
             details_table.add_column(
                 "Profitable", justify="right", style="green")
             details_table.add_column(
-                "Success Rate", justify="right", style="blue")
+                "Avg Success Rate", justify="right", style="blue")
+            details_table.add_column("Avg ROI", justify="right", style="cyan")
             details_table.add_column(
                 "Memory", justify="right", style="magenta")
 
             for result in successful_configs:
-                success_rate = f"{(result['profitable_count']/max(result['results_count'],1)*100):.1f}%"
+                # Calculate per-config averages
+                if result['results_count'] > 0 and 'candidates' in result:
+                    config_success_rate = sum(
+                        c.success_rate for c in result['candidates'] if c.success_rate is not None) / max(len(result['candidates']), 1) * 100
+                    config_roi = sum(
+                        c.roi for c in result['candidates']) / max(len(result['candidates']), 1) * 100
+                else:
+                    config_success_rate = (result.get('success_rate', 0)) * 100
+                    config_roi = (result.get('roi', 0)) * 100
                 details_table.add_row(
                     result['config'],
                     f"{result['results_count']:,}",
                     f"{result['profitable_count']:,}",
-                    success_rate,
+                    f"{config_success_rate:.2f}%",
+                    f"{config_roi:.2f}%",
                     f"{result['memory_used_mb']:.1f} MB"
                 )
 
