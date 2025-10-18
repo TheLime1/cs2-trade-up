@@ -110,19 +110,7 @@ HTML_TEMPLATE = """
                             </select>
                         </div>
                         
-                        <!-- Rarity Filter (re-added) -->
-                        <div>
-                            <label class="block text-sm font-medium text-gray-300 mb-2">Rarity</label>
-                            <select id="rarity" name="rarity" class="w-full p-2 bg-gray-700 border border-gray-600 rounded-md text-white">
-                                <option value="all" selected>All</option>
-                                <option value="Consumer">Consumer</option>
-                                <option value="Industrial">Industrial</option>
-                                <option value="Mil-Spec">Mil-Spec</option>
-                                <option value="Restricted">Restricted</option>
-                                <option value="Classified">Classified</option>
-                                <option value="Covert">Covert</option>
-                            </select>
-                        </div>
+                        <!-- Rarity Filter removed -->
                     </div>
                     
                     <!-- Sort By row -->
@@ -295,13 +283,8 @@ HTML_TEMPLATE = """
                             <p class="text-white font-medium">${composition}</p>
                         </div>
                         
-                        <!-- Key Metrics Grid - 6 cards without Success Rate -->
-                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-                            <!-- 1. Rarity -->
-                            <div class="bg-blue-900 border-l-4 border-blue-400 rounded-lg p-3">
-                                <div class="text-xs text-blue-300 font-medium uppercase">Rarity:</div>
-                                <div class="text-sm font-semibold text-blue-100">${result.inputs.rarity}</div>
-                            </div>
+                        <!-- Key Metrics Grid - 5 cards without Rarity -->
+                        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
                             
                             <!-- 2. Avg Input Float -->
                             <div class="bg-gray-700 border-l-4 border-gray-400 rounded-lg p-3">
@@ -467,9 +450,7 @@ def get_collections():
 def scan():
     """Analyze trade-ups with query parameters."""
     try:
-        # Parse parameters
-        # Default to 'all' so the UI/backend will analyze all rarities unless specified
-        rarity = request.args.get('rarity', 'all')
+        # Parse parameters (rarity filter removed)
         stattrak = request.args.get('stattrak', 'false').lower() == 'true'
         min_roi = float(request.args.get('min_roi', '0'))
         min_cost = float(request.args.get('min_cost', '0'))
@@ -480,47 +461,19 @@ def scan():
         assume_input_costs_include_fees = request.args.get(
             'assume_input_costs_include_fees', 'true').lower() == 'true'
 
-        # Validate rarity
-        valid_rarities = ['Consumer', 'Industrial',
-                          'Mil-Spec', 'Restricted', 'Classified', 'Covert', 'all']
-        if rarity not in valid_rarities:
-            return jsonify({"error": f"Invalid rarity. Must be one of: {valid_rarities}"}), 400
+        # Rarity validation removed
 
         # Get analyzer
         analyzer = analyzer_cache.get_analyzer()
 
-        # If rarity == 'all', aggregate results across supported rarities
-        if rarity == 'all':
-            rarities_to_run = ['Industrial',
-                               'Mil-Spec', 'Restricted', 'Classified']
-            aggregated = []
-            for r in rarities_to_run:
-                res = analyzer.analyze(
-                    rarity=r,
-                    stattrak=stattrak,
-                    min_roi=min_roi,
-                    top=top,
-                    assume_input_costs_include_fees=assume_input_costs_include_fees,
-                    use_cache=True
-                )
-                # attach rarity to each candidate for UI
-                for c in res:
-                    c.rarity = r
-                aggregated.extend(res)
-
-            # Sort and limit aggregated results
-            aggregated.sort(key=lambda x: x.roi, reverse=True)
-            results = aggregated[:top]
-        else:
-            # Perform analysis for single rarity (with caching enabled)
-            results = analyzer.analyze(
-                rarity=rarity,
-                stattrak=stattrak,
-                min_roi=min_roi,
-                top=top,
-                assume_input_costs_include_fees=assume_input_costs_include_fees,
-                use_cache=True  # Always use cache in Flask app for speed
-            )
+        # Always analyze without rarity filter
+        results = analyzer.analyze(
+            stattrak=stattrak,
+            min_roi=min_roi,
+            top=top,
+            assume_input_costs_include_fees=assume_input_costs_include_fees,
+            use_cache=True
+        )
 
         # Apply additional filters
         filtered_results = []
@@ -560,7 +513,6 @@ def scan():
         # Format response
         response_data = {
             "params": {
-                "rarity": rarity,
                 "stattrak": stattrak,
                 "min_roi": min_roi,
                 "min_cost": min_cost,
@@ -577,7 +529,6 @@ def scan():
         for candidate in filtered_results:
             result = {
                 "inputs": {
-                    "rarity": getattr(candidate, 'rarity', None) or candidate.rarity,
                     "stattrak": candidate.stattrak,
                     "composition": candidate.inputs,
                     "total_cost": candidate.total_cost,
